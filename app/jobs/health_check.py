@@ -1,0 +1,67 @@
+"""
+Job: health check — collects version, interface status, and VLANs in one pass.
+
+TODO (OpenClaw integration): parsed_data from this job is ideal input for
+OpenClaw to generate a natural language health summary or flag anomalies.
+"""
+
+from __future__ import annotations
+
+from app.logger import get_logger
+from app.models import Device, JobResult
+from app.parsers import parse_show_interfaces, parse_show_version, parse_show_vlans
+from app.ssh_client import run_command
+
+logger = get_logger(__name__)
+
+# Commands run for every health check — extend this list to add more checks
+HEALTH_COMMANDS: dict[str, str] = {
+    "version":    "show version",
+    "interfaces": "show interfaces status",
+    "vlans":      "show vlan brief",
+}
+
+
+def run(device: Device) -> JobResult:
+    """
+    Run a multi-command health check against a device.
+
+    Collects version, interface status, and VLAN info.
+    Partial failures are captured; the job succeeds only if all commands pass.
+    """
+    collected: dict = {}
+    errors: list[str] = []
+
+    parsers = {
+        "version":    parse_show_version,
+        "interfaces": parse_show_interfaces,
+        "vlans":      parse_show_vlans,
+    }
+
+    for key, command in HEALTH_COMMANDS.items():
+        try:
+            raw = run_command(device, command)
+            collected[key] = parsers[key](raw)
+            logger.info(f"Health check [{key}] OK on {device.name}")
+        except Exception as exc:
+            logger.warning(f"Health check [{key}] failed on {device.name}: {exc}")
+            errors.append(f"{key}: {exc}")
+
+    success = len(errors) == 0
+
+    summary_lines = [f"Health check — {device.name}"]
+    for key, val in collected.items():
+        preview = str(val)[:120]
+        summary_lines.append(f"  [{key}] {preview}")
+    if errors:
+        summary_lines.append(f"  [errors] {'; '.join(errors)}")
+
+    return JobResult(
+        success=success,
+        device=device.name,
+        intent="health_check",
+        command_executed=str(list(HEALTH_COMMANDS.values())),
+        parsed_data=collected,
+        raw_output="\n".join(summary_lines),
+        error="; ".join(errors) if errors else None,
+    )

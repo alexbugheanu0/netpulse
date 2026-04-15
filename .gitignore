@@ -1,0 +1,8 @@
+git-connection.local.txt
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+output/logs/*.log
+output/backups/*.cfg
