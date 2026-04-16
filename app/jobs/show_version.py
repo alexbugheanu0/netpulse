@@ -13,7 +13,7 @@ COMMAND = "show version"
 
 
 def run(device: Device) -> JobResult:
-    """Run 'show version' on a device and parse key fields."""
+    """Run 'show version' and return raw output with parsed key fields."""
     try:
         raw = run_command(device, COMMAND)
         parsed = parse_show_version(raw)

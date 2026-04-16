@@ -4,32 +4,32 @@
 
 devices:
   - name: sw-core-01
-    hostname: sw-core-01.lab.local
-    ip: 192.168.1.1
+    hostname: sw-core-01
+    ip: 192.168.100.11
     platform: cisco_ios
     role: core
     ssh_enabled: true
     snmp_enabled: false
 
   - name: sw-dist-01
-    hostname: sw-dist-01.lab.local
-    ip: 192.168.1.2
+    hostname: sw-dist-01
+    ip: 192.168.100.12
     platform: cisco_ios
     role: distribution
     ssh_enabled: true
     snmp_enabled: false
 
   - name: sw-acc-01
-    hostname: sw-acc-01.lab.local
-    ip: 192.168.1.10
+    hostname: sw-acc-01
+    ip: 192.168.100.13
     platform: cisco_ios
     role: access
     ssh_enabled: true
     snmp_enabled: false
 
   - name: sw-acc-02
-    hostname: sw-acc-02.lab.local
-    ip: 192.168.1.11
+    hostname: sw-acc-02
+    ip: 192.168.100.14
     platform: cisco_ios
     role: access
     ssh_enabled: true

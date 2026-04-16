@@ -1,0 +1,39 @@
+# Expected VLAN definitions by device role.
+#
+# Edit this file to match your network's baseline.
+# NetPulse reads it during audit_vlans and drift_check.
+#
+# Structure:
+#   roles:   one entry per device role (core / distribution / access)
+#   devices: optional per-device overrides — take precedence over the role baseline
+#
+# VLAN id values are strings to match 'show vlan brief' output.
+
+roles:
+  core:
+    - {id: "1",   name: default}
+    - {id: "10",  name: MGMT}
+    - {id: "20",  name: SERVERS}
+    - {id: "30",  name: USERS}
+    - {id: "100", name: VOICE}
+    - {id: "200", name: TRANSIT}
+
+  distribution:
+    - {id: "1",   name: default}
+    - {id: "10",  name: MGMT}
+    - {id: "20",  name: SERVERS}
+    - {id: "30",  name: USERS}
+    - {id: "100", name: VOICE}
+
+  access:
+    - {id: "1",   name: default}
+    - {id: "10",  name: MGMT}
+    - {id: "20",  name: SERVERS}
+    - {id: "30",  name: USERS}
+    - {id: "100", name: VOICE}
+
+# Per-device overrides (optional). Example:
+#   devices:
+#     sw-core-01:
+#       - {id: "999", name: OOB-MGMT}
+devices: {}

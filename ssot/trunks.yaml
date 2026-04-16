@@ -1,0 +1,34 @@
+# Expected allowed VLANs on uplink trunk ports, by device role.
+#
+# Edit this file to match your network's baseline.
+# NetPulse reads it during audit_trunks and drift_check.
+#
+# These values should match the "Vlans allowed on trunk" column
+# from 'show interfaces trunk' on a correctly configured device.
+#
+# Structure:
+#   roles:   one entry per device role (core / distribution / access)
+#   devices: optional per-device overrides — take precedence over the role baseline
+#
+# native_vlan:   expected native VLAN on all trunk ports for this role.
+# allowed_vlans: exact set of VLANs that should be permitted on each trunk port.
+
+roles:
+  core:
+    allowed_vlans: [1, 10, 20, 30, 100, 200]
+    native_vlan: 1
+
+  distribution:
+    allowed_vlans: [1, 10, 20, 30, 100]
+    native_vlan: 1
+
+  access:
+    allowed_vlans: [1, 10, 20, 30, 100]
+    native_vlan: 1
+
+# Per-device overrides (optional). Example:
+#   devices:
+#     sw-core-01:
+#       allowed_vlans: [1, 10, 20, 30, 100, 200, 300]
+#       native_vlan: 1
+devices: {}

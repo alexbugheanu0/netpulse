@@ -1,11 +1,12 @@
 """
 SSH client for NetPulse — thin wrapper around Netmiko.
 
-Reads credentials from environment variables only.
-Never accepts raw CLI from user input — callers pass pre-approved commands.
+Credentials come from environment variables only (see config.py).
+Callers pass pre-approved command strings — no raw user input is
+forwarded to the device.
 
-TODO (OpenClaw integration): Add optional session_log path parameter so
-OpenClaw can capture and analyse raw session transcripts.
+TODO (OpenClaw integration): Add an optional session_log path parameter
+so OpenClaw can capture and analyse the full CLI session transcript.
 """
 
 from __future__ import annotations
@@ -29,10 +30,10 @@ def run_command(device: Device, command: str) -> str:
     and return the raw output string.
 
     Raises:
-        EnvironmentError: SSH credentials not configured in .env
-        NetmikoAuthenticationException: bad username/password/enable secret
-        NetmikoTimeoutException: device unreachable or slow to respond
-        Exception: any other Netmiko or network error
+        EnvironmentError:                  SSH credentials not set in .env
+        NetmikoAuthenticationException:    bad username/password/enable secret
+        NetmikoTimeoutException:           device unreachable or too slow
+        Exception:                         any other Netmiko or network error
     """
     if not SSH_USERNAME or not SSH_PASSWORD:
         raise EnvironmentError(
@@ -42,12 +43,11 @@ def run_command(device: Device, command: str) -> str:
 
     connection_params: dict = {
         "device_type": device.platform,
-        "host": device.ip,
-        "username": SSH_USERNAME,
-        "password": SSH_PASSWORD,
-        "port": SSH_PORT,
-        "timeout": SSH_TIMEOUT,
-        "session_log": None,
+        "host":        device.ip,
+        "username":    SSH_USERNAME,
+        "password":    SSH_PASSWORD,
+        "port":        SSH_PORT,
+        "timeout":     SSH_TIMEOUT,
     }
 
     if SSH_SECRET:
@@ -60,17 +60,17 @@ def run_command(device: Device, command: str) -> str:
             if SSH_SECRET:
                 conn.enable()
             output: str = conn.send_command(command, read_timeout=SSH_TIMEOUT)
-            logger.debug(f"Response from {device.name} ({len(output)} chars)")
+            logger.debug(f"Response from {device.name}: {len(output)} chars")
             return output
 
     except NetmikoAuthenticationException as exc:
-        logger.error(f"Auth failed on {device.name}: {exc}")
+        logger.error(f"Auth failed on {device.name} ({device.ip}): {exc}")
         raise
 
     except NetmikoTimeoutException as exc:
-        logger.error(f"Timeout connecting to {device.name} ({device.ip}): {exc}")
+        logger.error(f"Timeout on {device.name} ({device.ip}): {exc}")
         raise
 
     except Exception as exc:
-        logger.error(f"SSH error on {device.name}: {exc}")
+        logger.error(f"SSH error on {device.name} ({device.ip}): {exc}")
         raise

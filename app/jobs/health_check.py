@@ -1,8 +1,8 @@
 """
-Job: health check — collects version, interface status, and VLANs in one pass.
+Job: health check — runs version, interface status, and VLAN queries in one pass.
 
-TODO (OpenClaw integration): parsed_data from this job is ideal input for
-OpenClaw to generate a natural language health summary or flag anomalies.
+TODO (OpenClaw integration): Feed parsed_data from this job into OpenClaw to
+generate a natural language health summary or flag anomalies automatically.
 """
 
 from __future__ import annotations
@@ -14,37 +14,37 @@ from app.ssh_client import run_command
 
 logger = get_logger(__name__)
 
-# Commands run for every health check — extend this list to add more checks
+# Commands run for every health check. Add entries here to extend the check set.
 HEALTH_COMMANDS: dict[str, str] = {
     "version":    "show version",
     "interfaces": "show interfaces status",
     "vlans":      "show vlan brief",
 }
 
+PARSERS = {
+    "version":    parse_show_version,
+    "interfaces": parse_show_interfaces,
+    "vlans":      parse_show_vlans,
+}
+
 
 def run(device: Device) -> JobResult:
     """
-    Run a multi-command health check against a device.
+    Run a multi-command health check against a single device.
 
-    Collects version, interface status, and VLAN info.
-    Partial failures are captured; the job succeeds only if all commands pass.
+    Each command is attempted independently — partial failures are captured
+    in the error field. The job succeeds only if all commands complete cleanly.
     """
     collected: dict = {}
     errors: list[str] = []
 
-    parsers = {
-        "version":    parse_show_version,
-        "interfaces": parse_show_interfaces,
-        "vlans":      parse_show_vlans,
-    }
-
     for key, command in HEALTH_COMMANDS.items():
         try:
             raw = run_command(device, command)
-            collected[key] = parsers[key](raw)
-            logger.info(f"Health check [{key}] OK on {device.name}")
+            collected[key] = PARSERS[key](raw)
+            logger.info(f"Health [{key}] OK on {device.name}")
         except Exception as exc:
-            logger.warning(f"Health check [{key}] failed on {device.name}: {exc}")
+            logger.warning(f"Health [{key}] FAILED on {device.name}: {exc}")
             errors.append(f"{key}: {exc}")
 
     success = len(errors) == 0
@@ -60,7 +60,7 @@ def run(device: Device) -> JobResult:
         success=success,
         device=device.name,
         intent="health_check",
-        command_executed=str(list(HEALTH_COMMANDS.values())),
+        command_executed=", ".join(HEALTH_COMMANDS.values()),
         parsed_data=collected,
         raw_output="\n".join(summary_lines),
         error="; ".join(errors) if errors else None,

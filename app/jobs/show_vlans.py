@@ -13,7 +13,7 @@ COMMAND = "show vlan brief"
 
 
 def run(device: Device) -> JobResult:
-    """Run 'show vlan brief' on a device and return parsed VLAN list."""
+    """Run 'show vlan brief' and return raw output with parsed VLAN list."""
     try:
         raw = run_command(device, COMMAND)
         parsed = parse_show_vlans(raw)

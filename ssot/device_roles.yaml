@@ -1,0 +1,18 @@
+# Expected role assignment for each device.
+#
+# During drift_check, NetPulse verifies that each device's role in
+# inventory/devices.yaml matches the expected role defined here.
+# A mismatch is reported as a MISMATCH finding.
+#
+# These values should stay in sync with the 'role' field in
+# inventory/devices.yaml.  If you intentionally reassign a device's
+# role, update both files.
+#
+# Valid roles: core, distribution, access
+# (these must match the keys used in ssot/vlans.yaml and ssot/trunks.yaml)
+
+devices:
+  sw-core-01: core
+  sw-dist-01: distribution
+  sw-acc-01:  access
+  sw-acc-02:  access

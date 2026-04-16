@@ -1,16 +1,22 @@
 """
 SNMP client scaffold — v1 placeholder.
 
-SSH is the primary transport in this release.
-This module exists as a clean extension point.
+SSH is the primary transport in this release. This module exists as a
+clean extension point for polling-based enrichment.
 
 To activate SNMP support:
-1. pip install pysnmp
-2. Implement get_sys_descr() and get_interface_counters() below
-3. Set snmp_enabled: true in devices.yaml for target devices
+    1. pip install pysnmp  (and add it to requirements.txt)
+    2. Set snmp_enabled: true for target devices in devices.yaml
+    3. Implement get_sys_descr() and get_interface_counters() below
 
-TODO (OpenClaw integration): SNMP polling can feed real-time interface
-counters and sysDescr data into OpenClaw for trend analysis and alerting.
+TODO (SNMP enrichment): Call get_sys_descr() during inventory load to
+verify device reachability and cross-check platform strings before SSH jobs run.
+
+TODO (SNMP enrichment): Call get_interface_counters() in health_check.py to
+add real-time error/discard/utilisation counters to the health check output.
+
+TODO (OpenClaw integration): Pipe SNMP counter trends into OpenClaw context
+so it can detect interface flaps, high error rates, and utilisation spikes.
 """
 
 from __future__ import annotations
@@ -24,18 +30,21 @@ def get_sys_descr(ip: str, community: str = "public") -> str:
     """
     Retrieve sysDescr (OID 1.3.6.1.2.1.1.1.0) from a device via SNMPv2c.
 
-    Not implemented in v1 — returns a placeholder string.
-    Requires pysnmp to be installed and SNMP enabled on the device.
+    Not implemented in v1 — raises NotImplementedError.
     """
-    logger.warning(f"SNMP get_sys_descr called for {ip} — not implemented in v1.")
-    return f"[SNMP not implemented] sysDescr for {ip}"
+    raise NotImplementedError(
+        f"SNMP not implemented in v1. "
+        f"Install pysnmp and implement get_sys_descr() to query {ip}."
+    )
 
 
 def get_interface_counters(ip: str, community: str = "public") -> dict:
     """
-    Retrieve interface counter OIDs from a device via SNMP.
+    Retrieve interface counter OIDs (ifInErrors, ifOutErrors, etc.) via SNMP.
 
-    Not implemented in v1 — returns an empty dict.
+    Not implemented in v1 — raises NotImplementedError.
     """
-    logger.warning(f"SNMP get_interface_counters called for {ip} — not implemented in v1.")
-    return {}
+    raise NotImplementedError(
+        f"SNMP not implemented in v1. "
+        f"Install pysnmp and implement get_interface_counters() to query {ip}."
+    )

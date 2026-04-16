@@ -8,48 +8,41 @@ an operator-friendly message.
 
 from __future__ import annotations
 
-from typing import Dict
-
 from app.logger import get_logger
 from app.models import Device, IntentRequest, IntentType, ScopeType
 
 logger = get_logger(__name__)
 
-# Safe read-only intents — no state is changed on the device
-READ_ONLY_INTENTS: frozenset[IntentType] = frozenset({
-    IntentType.SHOW_INTERFACES,
-    IntentType.SHOW_VLANS,
-    IntentType.SHOW_TRUNKS,
-    IntentType.SHOW_VERSION,
-    IntentType.HEALTH_CHECK,
-})
-
-# Intents that write or save data (even if they only read from the device)
-WRITE_LIKE_INTENTS: frozenset[IntentType] = frozenset({
-    IntentType.BACKUP_CONFIG,
+# These intents operate on local data only — no SSH connection is opened.
+NON_SSH_INTENTS: frozenset[IntentType] = frozenset({
+    IntentType.DIFF_BACKUP,
 })
 
 
 def validate_request(
     req: IntentRequest,
-    inventory: Dict[str, Device],
+    inventory: dict[str, Device],
 ) -> None:
     """
-    Validate an IntentRequest against the inventory and allowed ruleset.
+    Validate an IntentRequest against the loaded inventory.
 
-    Checks:
-    - Intent is in the allowed set
-    - Device exists in inventory (single-scope)
-    - Device has SSH enabled
-    - At least one SSH-enabled device exists (all-scope)
+    Checks vary by scope:
+    - SINGLE: device exists, SSH enabled (unless non-SSH intent)
+    - ALL:    at least one SSH-enabled device (unless non-SSH intent)
+    - ROLE:   role exists in inventory, at least one SSH-enabled device with that role
+
+    Special cases:
+    - DIFF_BACKUP: no SSH check needed (reads local files)
+    - PING: ping_target must be set
 
     Raises ValueError with a clear message on any violation.
     """
-    all_intents = set(IntentType)
-    if req.intent not in all_intents:
+    needs_ssh = req.intent not in NON_SSH_INTENTS
+
+    if req.intent == IntentType.PING and not req.ping_target:
         raise ValueError(
-            f"Unsupported intent: '{req.intent}'. "
-            f"Allowed: {[i.value for i in IntentType]}"
+            "A target IP is required for ping. "
+            "Use --target <ip> or include it in the query: 'ping 10.0.0.1 from sw-core-01'."
         )
 
     if req.scope == ScopeType.SINGLE:
@@ -63,21 +56,42 @@ def validate_request(
             )
 
         device = inventory[req.device]
-        if not device.ssh_enabled:
+        if needs_ssh and not device.ssh_enabled:
             raise ValueError(
                 f"Device '{req.device}' has SSH disabled in inventory. "
-                "Enable it or choose a different device."
+                "Set ssh_enabled: true in devices.yaml or choose a different device."
             )
 
-    if req.scope == ScopeType.ALL:
-        ssh_devices = [d for d in inventory.values() if d.ssh_enabled]
-        if not ssh_devices:
+    elif req.scope == ScopeType.ALL:
+        if needs_ssh:
+            ssh_devices = [d for d in inventory.values() if d.ssh_enabled]
+            if not ssh_devices:
+                raise ValueError(
+                    "No SSH-enabled devices in inventory. "
+                    "Check devices.yaml — at least one device must have ssh_enabled: true."
+                )
+
+    elif req.scope == ScopeType.ROLE:
+        if not req.role:
+            raise ValueError("A role name is required for role-scoped requests.")
+
+        role_devices = [d for d in inventory.values() if d.role == req.role]
+        if not role_devices:
+            available = sorted({d.role for d in inventory.values()})
             raise ValueError(
-                "No SSH-enabled devices found in inventory. "
-                "Check devices.yaml and ensure ssh_enabled: true."
+                f"No devices found with role '{req.role}'.\n"
+                f"Available roles: {available}"
             )
+
+        if needs_ssh:
+            ssh_role_devices = [d for d in role_devices if d.ssh_enabled]
+            if not ssh_role_devices:
+                raise ValueError(
+                    f"No SSH-enabled devices with role '{req.role}'. "
+                    "Check ssh_enabled in devices.yaml."
+                )
 
     logger.info(
         f"Validation passed — intent={req.intent.value}, "
-        f"device={req.device}, scope={req.scope.value}"
+        f"device={req.device}, scope={req.scope.value}, role={req.role}"
     )

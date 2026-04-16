@@ -13,8 +13,9 @@ COMMAND = "show interfaces trunk"
 
 def run(device: Device) -> JobResult:
     """
-    Run 'show interfaces trunk' on a device.
-    Returns raw output — trunk table formatting is self-explanatory.
+    Run 'show interfaces trunk' and return the raw output.
+
+    The trunk table is self-explanatory in raw form — no structured parser needed.
     """
     try:
         raw = run_command(device, COMMAND)

@@ -13,7 +13,7 @@ COMMAND = "show interfaces status"
 
 
 def run(device: Device) -> JobResult:
-    """Run 'show interfaces status' on a device and return parsed results."""
+    """Run 'show interfaces status' and return raw output with parsed port list."""
     try:
         raw = run_command(device, COMMAND)
         parsed = parse_show_interfaces(raw)
