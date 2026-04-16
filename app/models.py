@@ -40,6 +40,12 @@ class IntentType(str, Enum):
     AUDIT_TRUNKS       = "audit_trunks"      # compare trunks vs ssot/trunks.yaml
     DEVICE_FACTS       = "device_facts"      # collect and summarise device facts
     DRIFT_CHECK        = "drift_check"       # combined VLAN + trunk audit
+    # Write / config-push intents (scope=single only; require Telegram approval)
+    ADD_VLAN           = "add_vlan"          # add a VLAN to a device
+    REMOVE_VLAN        = "remove_vlan"       # remove a VLAN from a device
+    SHUTDOWN_INTERFACE    = "shutdown_interface"    # shut down an interface
+    NO_SHUTDOWN_INTERFACE = "no_shutdown_interface" # bring up an interface
+    SET_INTERFACE_VLAN    = "set_interface_vlan"    # set access VLAN on a port
 
 
 class ScopeType(str, Enum):
@@ -72,6 +78,10 @@ class IntentRequest(BaseModel):
     role:        Optional[str] = None      # for scope=role, e.g. "core", "access"
     ping_target: Optional[str] = None     # destination IP for intent=ping
     raw_query:   str = ""
+    # Write intent parameters (only used by write intents; ignored otherwise)
+    vlan_id:     Optional[int] = None     # for add_vlan, remove_vlan, set_interface_vlan
+    vlan_name:   Optional[str] = None     # for add_vlan
+    interface:   Optional[str] = None     # for shutdown_interface, no_shutdown_interface, set_interface_vlan
 
 
 class JobResult(BaseModel):

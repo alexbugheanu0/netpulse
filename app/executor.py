@@ -29,6 +29,7 @@ from app.logger import get_logger
 from app.models import IntentRequest, IntentType, JobResult, ScopeType
 
 from app.jobs import (
+    add_vlan,
     audit_trunks,
     audit_vlans,
     backup_config,
@@ -36,7 +37,10 @@ from app.jobs import (
     diff_backup,
     drift_check,
     health_check,
+    no_shutdown_interface,
     ping,
+    remove_vlan,
+    set_interface_vlan,
     show_arp,
     show_cdp,
     show_errors,
@@ -50,6 +54,7 @@ from app.jobs import (
     show_trunks,
     show_version,
     show_vlans,
+    shutdown_interface,
 )
 
 logger = get_logger(__name__)
@@ -79,6 +84,13 @@ JOB_MAP: dict[IntentType, Callable] = {
     IntentType.AUDIT_TRUNKS:       audit_trunks.run,
     IntentType.DEVICE_FACTS:       device_facts.run,
     IntentType.DRIFT_CHECK:        drift_check.run,
+    # Write / config-push intents — dispatched via lambdas in execute() to
+    # inject write params; entries here keep the registry complete.
+    IntentType.ADD_VLAN:              add_vlan.run,
+    IntentType.REMOVE_VLAN:           remove_vlan.run,
+    IntentType.SHUTDOWN_INTERFACE:    shutdown_interface.run,
+    IntentType.NO_SHUTDOWN_INTERFACE: no_shutdown_interface.run,
+    IntentType.SET_INTERFACE_VLAN:    set_interface_vlan.run,
 }
 
 
@@ -104,9 +116,19 @@ def execute(req: IntentRequest, inventory: dict) -> list[JobResult]:
     All per-device SSH or I/O errors are caught inside each job module and
     returned as JobResult(success=False, error=...) — they do not propagate here.
     """
-    # Ping injects the target IP at call time; all other jobs take only device
+    # Special cases: intents that inject extra parameters at call time
     if req.intent == IntentType.PING:
         job_fn: Callable = lambda device: ping.run(device, req.ping_target)
+    elif req.intent == IntentType.ADD_VLAN:
+        job_fn = lambda device: add_vlan.run(device, req.vlan_id, req.vlan_name)
+    elif req.intent == IntentType.REMOVE_VLAN:
+        job_fn = lambda device: remove_vlan.run(device, req.vlan_id)
+    elif req.intent == IntentType.SHUTDOWN_INTERFACE:
+        job_fn = lambda device: shutdown_interface.run(device, req.interface)
+    elif req.intent == IntentType.NO_SHUTDOWN_INTERFACE:
+        job_fn = lambda device: no_shutdown_interface.run(device, req.interface)
+    elif req.intent == IntentType.SET_INTERFACE_VLAN:
+        job_fn = lambda device: set_interface_vlan.run(device, req.interface, req.vlan_id)
     else:
         job_fn = JOB_MAP[req.intent]
 

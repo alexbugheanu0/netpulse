@@ -1,19 +1,21 @@
 ---
 name: netpulse
-description: Cisco switch diagnostic engine — routing table, ARP, EtherChannel, port security, syslog, STP, CDP, MAC table, VLAN/trunk SSOT audit, drift check, config backup. Read-only SSH execution against real devices.
+description: Cisco switch diagnostic and config engine — routing table, ARP, EtherChannel, port security, syslog, STP, CDP, MAC table, VLAN/trunk SSOT audit, drift check, config backup. Read and write SSH access to real devices. Write operations require Telegram confirmation before execution.
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "os": ["linux", "darwin"]}}
 ---
 
-# NetPulse — Cisco Network Diagnostics (CCIE-Grade)
+# NetPulse — Cisco Network Diagnostics & Configuration (CCIE-Grade)
 
-Use this skill to run structured, read-only diagnostics against Cisco switches via SSH.
-NetPulse maps every request to a hardcoded `show` command — no raw CLI ever reaches a device.
+Use this skill to run structured diagnostics and configuration changes against Cisco switches via SSH.
+NetPulse maps every request to hardcoded commands — no raw CLI ever reaches a device.
+
+Read-only intents run immediately. Write intents that modify device config **require explicit user confirmation in chat before the adapter is called** (see Approval workflow below).
 
 ---
 
 ## When to use
 
-Activate when the user asks about any of the following. Use the most specific intent.
+Activate when the user asks about or requests changes to any of the following. Use the most specific intent.
 
 **Layer 2 / Switching**
 - VLANs: list, count, missing VLAN, "why can't I see VLAN X" → `show_vlans`
@@ -49,8 +51,14 @@ Activate when the user asks about any of the following. Use the most specific in
 - Trunk allowed VLAN audit vs baseline → `audit_trunks`
 - Combined drift check (VLANs + trunks + device role) → `drift_check`
 
+**Configuration changes (write intents — require approval)**
+- Add a VLAN to a switch → `add_vlan`
+- Remove a VLAN from a switch → `remove_vlan`
+- Shut down a port → `shutdown_interface`
+- Bring up a port (no shutdown) → `no_shutdown_interface`
+- Set access VLAN on a port → `set_interface_vlan`
+
 Do NOT use this skill for:
-- Writing, deploying, or modifying device configuration
 - Running arbitrary Cisco CLI commands
 - Any intent not in the allowed list below
 
@@ -80,6 +88,41 @@ Do NOT use this skill for:
 | `audit_vlans` | `show vlan brief` + SSOT | Missing/extra VLANs vs `ssot/vlans.yaml` |
 | `audit_trunks` | `show interfaces trunk` + SSOT | Trunk VLAN drift vs `ssot/trunks.yaml` |
 | `drift_check` | VLANs + trunks + roles | Combined SSOT drift across all checks |
+
+### Write intents (scope=single only — require approval before execution)
+
+| Intent | Config commands pushed | Required params |
+|---|---|---|
+| `add_vlan` | `vlan <id>` / `name <name>` | `vlan_id` (int), `vlan_name` (str), `device` |
+| `remove_vlan` | `no vlan <id>` | `vlan_id` (int), `device` |
+| `shutdown_interface` | `interface <X>` / `shutdown` | `interface` (str), `device` |
+| `no_shutdown_interface` | `interface <X>` / `no shutdown` | `interface` (str), `device` |
+| `set_interface_vlan` | `interface <X>` / `switchport mode access` / `switchport access vlan <id>` | `interface` (str), `vlan_id` (int), `device` |
+
+---
+
+## Approval workflow for write intents
+
+**MANDATORY: Never call the adapter for a write intent without explicit user confirmation.**
+
+For any request that maps to a write intent (`add_vlan`, `remove_vlan`,
+`shutdown_interface`, `no_shutdown_interface`, `set_interface_vlan`):
+
+1. **Identify the intent and parameters** from the user's message.
+2. **Present the proposed action** in a clear summary before executing:
+
+   > ⚠️ **Config change requested**
+   > - Device: `sw-core-01`
+   > - Action: Add VLAN 50 named `SERVERS2`
+   > - Commands: `vlan 50` / `name SERVERS2`
+   >
+   > Confirm? Reply **yes** to execute or **no** to cancel.
+
+3. **Wait for the user's reply** in Telegram.
+4. **Only call the adapter** if the user replies with `yes`, `y`, `confirm`, or equivalent.
+5. If the user replies `no`, `cancel`, or anything negative — abort and confirm cancellation.
+
+Do NOT execute write intents silently or assume confirmation from the original request.
 
 ---
 
@@ -407,6 +450,103 @@ Present each device's summary. Flag devices with status `missing` or `mismatch`.
 
 ---
 
+### Example 11 — Add a VLAN (write intent, requires approval)
+
+User: "add VLAN 50 called SERVERS2 to sw-core-01"
+
+Step 1 — Present for approval before calling the adapter:
+> ⚠️ **Config change requested**
+> - Device: `sw-core-01`
+> - Action: Add VLAN 50 named `SERVERS2`
+> - Commands: `vlan 50` / `name SERVERS2`
+>
+> Confirm? Reply **yes** to execute or **no** to cancel.
+
+Step 2 — After user confirms, call the adapter:
+```json
+{"intent":"add_vlan","device":"sw-core-01","scope":"single","vlan_id":50,"vlan_name":"SERVERS2","raw_query":"add VLAN 50 called SERVERS2 to sw-core-01"}
+```
+
+Report `results[].summary`. If successful: "VLAN 50 (SERVERS2) added to sw-core-01."
+
+---
+
+### Example 12 — Remove a VLAN (write intent, requires approval)
+
+User: "remove VLAN 50 from sw-core-01"
+
+Step 1 — Present for approval:
+> ⚠️ **Config change requested**
+> - Device: `sw-core-01`
+> - Action: Remove VLAN 50
+> - Command: `no vlan 50`
+>
+> Confirm? Reply **yes** to execute or **no** to cancel.
+
+Step 2 — After confirmation:
+```json
+{"intent":"remove_vlan","device":"sw-core-01","scope":"single","vlan_id":50,"raw_query":"remove VLAN 50 from sw-core-01"}
+```
+
+---
+
+### Example 13 — Shut down an interface (write intent, requires approval)
+
+User: "shut down Gi1/0/5 on sw-acc-01"
+
+Step 1 — Present for approval:
+> ⚠️ **Config change requested**
+> - Device: `sw-acc-01`
+> - Action: Shut down interface `Gi1/0/5`
+> - Commands: `interface Gi1/0/5` / `shutdown`
+>
+> Confirm? Reply **yes** to execute or **no** to cancel.
+
+Step 2 — After confirmation:
+```json
+{"intent":"shutdown_interface","device":"sw-acc-01","scope":"single","interface":"Gi1/0/5","raw_query":"shut down Gi1/0/5 on sw-acc-01"}
+```
+
+---
+
+### Example 14 — Bring up an interface (write intent, requires approval)
+
+User: "no shutdown Gi1/0/5 on sw-acc-01"
+
+Step 1 — Present for approval:
+> ⚠️ **Config change requested**
+> - Device: `sw-acc-01`
+> - Action: Enable interface `Gi1/0/5` (no shutdown)
+> - Commands: `interface Gi1/0/5` / `no shutdown`
+>
+> Confirm? Reply **yes** to execute or **no** to cancel.
+
+Step 2 — After confirmation:
+```json
+{"intent":"no_shutdown_interface","device":"sw-acc-01","scope":"single","interface":"Gi1/0/5","raw_query":"no shutdown Gi1/0/5 on sw-acc-01"}
+```
+
+---
+
+### Example 15 — Set access VLAN on a port (write intent, requires approval)
+
+User: "set Gi1/0/10 on sw-acc-02 to VLAN 30"
+
+Step 1 — Present for approval:
+> ⚠️ **Config change requested**
+> - Device: `sw-acc-02`
+> - Action: Set `Gi1/0/10` as access port in VLAN 30
+> - Commands: `interface Gi1/0/10` / `switchport mode access` / `switchport access vlan 30`
+>
+> Confirm? Reply **yes** to execute or **no** to cancel.
+
+Step 2 — After confirmation:
+```json
+{"intent":"set_interface_vlan","device":"sw-acc-02","scope":"single","interface":"Gi1/0/10","vlan_id":30,"raw_query":"set Gi1/0/10 on sw-acc-02 to VLAN 30"}
+```
+
+---
+
 ## Safety constraints
 
 - NEVER invent a device name. Only use names from the inventory table.
@@ -414,5 +554,6 @@ Present each device's summary. Flag devices with status `missing` or `mismatch`.
 - NEVER use an intent not in the allowed list. The adapter rejects unknown intents.
 - For `scope=all`, omit the `device` field entirely.
 - For `scope=role`, set `role` to one of: `core`, `distribution`, `access`.
-- The adapter is read-only. No `show` command modifies device state.
 - `ping_target` is only required (and only used) when `intent=ping`.
+- Write intents (`add_vlan`, `remove_vlan`, `shutdown_interface`, `no_shutdown_interface`, `set_interface_vlan`) are restricted to `scope=single` — bulk writes are not permitted.
+- NEVER execute a write intent without presenting the proposed change and receiving explicit confirmation from the user in Telegram first.

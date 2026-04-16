@@ -68,9 +68,9 @@ from app.validators import validate_request
 logger = get_logger("netpulse.openclaw")
 
 # ── Allowlist ──────────────────────────────────────────────────────────────────
-# Only these intents are exposed to OpenClaw in v1.
-# All are read-only or backup operations — no config deployment.
-# Add new intents here only after testing in CLI first; keep this list tight.
+# Intents exposed to OpenClaw. Read-only intents run freely; write intents
+# require the agent to obtain explicit Telegram confirmation first (enforced
+# in SKILL.md — the adapter executes only after the user confirms).
 OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = frozenset({
     # Operational show intents
     IntentType.SHOW_INTERFACES,
@@ -96,6 +96,22 @@ OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.AUDIT_TRUNKS,
     IntentType.DEVICE_FACTS,
     IntentType.DRIFT_CHECK,
+    # Write / config-push intents (scope=single only; Telegram approval required)
+    IntentType.ADD_VLAN,
+    IntentType.REMOVE_VLAN,
+    IntentType.SHUTDOWN_INTERFACE,
+    IntentType.NO_SHUTDOWN_INTERFACE,
+    IntentType.SET_INTERFACE_VLAN,
+})
+
+# Write intents that modify device config — the agent MUST obtain explicit
+# user confirmation in chat before calling the adapter with any of these.
+WRITE_INTENTS: frozenset[IntentType] = frozenset({
+    IntentType.ADD_VLAN,
+    IntentType.REMOVE_VLAN,
+    IntentType.SHUTDOWN_INTERFACE,
+    IntentType.NO_SHUTDOWN_INTERFACE,
+    IntentType.SET_INTERFACE_VLAN,
 })
 
 # Valid scope strings — checked explicitly before ScopeType conversion
@@ -110,6 +126,10 @@ class OpenClawRequest(BaseModel):
 
     OpenClaw must classify the user request into one of the allowed intents
     before calling this adapter. It must NOT forward raw user text as intent.
+
+    Write intents (add_vlan, remove_vlan, shutdown_interface,
+    no_shutdown_interface, set_interface_vlan) require the additional fields
+    below and must only be sent after the user confirms the action in chat.
     """
 
     intent:    str               # must be in OPENCLAW_ALLOWED_INTENTS
@@ -117,6 +137,10 @@ class OpenClawRequest(BaseModel):
     scope:     str = "single"   # "single" | "all" | "role"
     role:      Optional[str] = None
     raw_query: str = ""          # original user message; logged for audit only
+    # Write intent parameters (ignored for read-only intents)
+    vlan_id:   Optional[int] = None   # add_vlan, remove_vlan, set_interface_vlan
+    vlan_name: Optional[str] = None   # add_vlan
+    interface: Optional[str] = None   # shutdown_interface, no_shutdown_interface, set_interface_vlan
 
 
 class OpenClawResult(BaseModel):
@@ -180,10 +204,16 @@ def run_openclaw(payload: dict) -> dict:
         )
         return _err(intent_str, scope_str, human_msg)
 
+    _is_write = intent_str in {i.value for i in WRITE_INTENTS}
     logger.info(
         f"OpenClaw request — intent={oc_req.intent!r}, scope={oc_req.scope!r}, "
         f"device={oc_req.device!r}, role={oc_req.role!r}, "
         f"raw_query={oc_req.raw_query!r}"
+        + (
+            f", vlan_id={oc_req.vlan_id!r}, vlan_name={oc_req.vlan_name!r}, "
+            f"interface={oc_req.interface!r} [WRITE]"
+            if _is_write else ""
+        )
     )
 
     # ── Step 2: validate scope value ──────────────────────────────────────────
@@ -231,6 +261,10 @@ def run_openclaw(payload: dict) -> dict:
         scope=ScopeType(oc_req.scope),
         role=oc_req.role,
         raw_query=oc_req.raw_query or f"openclaw:{oc_req.intent}",
+        # Write intent parameters — None for read-only intents
+        vlan_id=oc_req.vlan_id,
+        vlan_name=oc_req.vlan_name,
+        interface=oc_req.interface,
     )
 
     try:

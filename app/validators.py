@@ -18,6 +18,16 @@ NON_SSH_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.DIFF_BACKUP,
 })
 
+# Write intents push config to devices. They are restricted to scope=single
+# and require specific parameters validated below.
+WRITE_INTENTS: frozenset[IntentType] = frozenset({
+    IntentType.ADD_VLAN,
+    IntentType.REMOVE_VLAN,
+    IntentType.SHUTDOWN_INTERFACE,
+    IntentType.NO_SHUTDOWN_INTERFACE,
+    IntentType.SET_INTERFACE_VLAN,
+})
+
 
 def validate_request(
     req: IntentRequest,
@@ -38,6 +48,36 @@ def validate_request(
     Raises ValueError with a clear message on any violation.
     """
     needs_ssh = req.intent not in NON_SSH_INTENTS
+
+    # ── Write intent constraints ───────────────────────────────────────────────
+    if req.intent in WRITE_INTENTS:
+        if req.scope != ScopeType.SINGLE:
+            raise ValueError(
+                f"Write intent '{req.intent.value}' requires scope=single. "
+                "Bulk writes across all devices or roles are not permitted."
+            )
+
+        # VLAN intents require vlan_id
+        if req.intent in {IntentType.ADD_VLAN, IntentType.REMOVE_VLAN,
+                          IntentType.SET_INTERFACE_VLAN}:
+            if req.vlan_id is None:
+                raise ValueError(
+                    f"Intent '{req.intent.value}' requires a vlan_id."
+                )
+
+        # add_vlan also requires vlan_name
+        if req.intent == IntentType.ADD_VLAN and not req.vlan_name:
+            raise ValueError("Intent 'add_vlan' requires a vlan_name.")
+
+        # Interface intents require interface
+        if req.intent in {IntentType.SHUTDOWN_INTERFACE,
+                          IntentType.NO_SHUTDOWN_INTERFACE,
+                          IntentType.SET_INTERFACE_VLAN}:
+            if not req.interface:
+                raise ValueError(
+                    f"Intent '{req.intent.value}' requires an interface "
+                    "(e.g. 'Gi1/0/5')."
+                )
 
     if req.intent == IntentType.PING and not req.ping_target:
         raise ValueError(
