@@ -43,6 +43,30 @@ output against the SSOT files you maintain — they never modify device config.
 
 ## Quick start
 
+### Option A — Automated (Ubuntu / Debian, recommended)
+
+Clone the project and run the setup wizard — it handles everything in one pass:
+
+```bash
+git clone <repo-url> netpulse-project
+cd netpulse-project
+bash scripts/setup.sh
+```
+
+The wizard will: install system packages, create the Python venv, prompt for
+SSH credentials (passwords hidden), walk through adding your network devices,
+run the test suite, and optionally install OpenClaw for Telegram/WhatsApp/Discord.
+
+To add or remove devices after the initial setup:
+
+```bash
+bash scripts/add-device.sh
+```
+
+---
+
+### Option B — Manual setup
+
 ```bash
 # 1. Clone and enter the project
 git clone <repo-url> netpulse-project
@@ -415,7 +439,10 @@ netpulse/
 │   └── netpulse/
 │       └── SKILL.md                # OpenClaw skill — teaches agent how to call NetPulse
 ├── scripts/
-│   └── run_openclaw_netpulse.sh    # Shell wrapper — handles venv, called by exec tool
+│   ├── setup.sh                    # One-command installer wizard (Ubuntu / Debian)
+│   ├── add-device.sh               # Add / remove devices post-install
+│   ├── run_openclaw_netpulse.sh    # Shell wrapper — handles venv, called by exec tool
+│   └── start-openclaw.sh           # Start / stop the OpenClaw gateway
 ├── tests/
 │   ├── test_intents.py
 │   ├── test_inventory.py
