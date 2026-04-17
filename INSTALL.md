@@ -1,5 +1,27 @@
 # NetPulse — Installation and Run Guide
 
+## Quick install (Ubuntu / Debian)
+
+Run a single command from the project root and the wizard handles everything:
+
+```bash
+bash scripts/setup.sh
+```
+
+It will: install system packages, create the Python venv, prompt for SSH
+credentials (passwords hidden), walk you through adding your network devices,
+run the test suite, and optionally set up OpenClaw for Telegram/WhatsApp/Discord.
+
+To add or remove devices after the initial setup:
+
+```bash
+bash scripts/add-device.sh
+```
+
+---
+
+## Manual installation
+
 Step-by-step procedure for setting up NetPulse on a Linux or macOS machine,
 using it from the CLI, and connecting it to OpenClaw for natural language access
 from Telegram, WhatsApp, or Discord.
