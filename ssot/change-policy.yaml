@@ -1,0 +1,71 @@
+# NetPulse Change Policy — Single Source of Truth
+#
+# The agent reads this file before every write intent to decide whether to
+# execute autonomously or stop and ask for user confirmation.
+#
+# Sections:
+#   auto_approve      — ALL listed conditions must be true to self-approve
+#   require_approval  — ANY matching condition triggers an approval prompt
+#   forbidden         — never execute, even if the user says yes
+
+# ── AUTO-APPROVE ──────────────────────────────────────────────────────────────
+# The agent may proceed without asking if ALL conditions in the block are met.
+
+auto_approve:
+
+  add_vlan:
+    description: "Restoring a VLAN that is already defined in the SSOT baseline for the device's role"
+    conditions:
+      - vlan_id exists in ssot/vlans.yaml under the target device's role
+      - vlan_name matches exactly the name defined in ssot/vlans.yaml
+      - device is listed in inventory/devices.yaml with ssh_enabled true
+      - scope is single
+
+  no_shutdown_interface:
+    description: "Bringing up an access port that is not a trunk uplink"
+    conditions:
+      - device role is access
+      - interface is not listed as an uplink in ssot/protected-resources.yaml
+      - scope is single
+
+  set_interface_vlan:
+    description: "Assigning an access port to a VLAN already in the SSOT baseline"
+    conditions:
+      - vlan_id exists in ssot/vlans.yaml under the target device's role
+      - device role is access
+      - scope is single
+
+# ── REQUIRE APPROVAL ──────────────────────────────────────────────────────────
+# If ANY condition below matches, stop and present an approval prompt before
+# calling the adapter. Wait for explicit "yes" before proceeding.
+
+require_approval:
+
+  add_vlan:
+    - vlan_id is not present in ssot/vlans.yaml for the device's role
+    - vlan_name does not match the name in ssot/vlans.yaml for that vlan_id
+    - scope is all or role
+
+  remove_vlan:
+    - always   # removing any VLAN always requires explicit user confirmation
+
+  shutdown_interface:
+    - always   # shutting down any port always requires explicit user confirmation
+
+  no_shutdown_interface:
+    - device role is core or distribution
+    - interface is listed as a protected uplink in ssot/protected-resources.yaml
+
+  set_interface_vlan:
+    - vlan_id is not present in ssot/vlans.yaml for the device's role
+    - device role is core or distribution
+
+# ── FORBIDDEN ─────────────────────────────────────────────────────────────────
+# Refuse these unconditionally. Explain why and do not call the adapter.
+
+forbidden:
+  - scope all or scope role on any write intent   # bulk config pushes are never permitted
+  - remove_vlan targeting a VLAN listed in ssot/protected-resources.yaml protected_vlans
+  - shutdown_interface on a device listed in ssot/protected-resources.yaml protected_devices without the exact device name confirmed in the request
+  - any intent not present in the allowed intent table in skills/netpulse/SKILL.md
+  - raw Cisco CLI strings passed directly to SSH — structured intents only

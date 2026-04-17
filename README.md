@@ -108,14 +108,16 @@ Supported platforms follow Netmiko naming: `cisco_ios`, `cisco_xe`,
 
 ## ssot/ — SSOT baseline files
 
-Three YAML files define what the network *should* look like.
-Edit them to match your lab or production baseline.
+Five YAML files define what the network *should* look like and how the agent
+is allowed to change it. Edit them to match your lab or production baseline.
 
 ```
 ssot/
-├── vlans.yaml         # expected VLANs per role (core / distribution / access)
-├── trunks.yaml        # expected allowed VLANs on trunk ports, per role
-└── device_roles.yaml  # expected role for each named device
+├── vlans.yaml               # expected VLANs per role (core / distribution / access)
+├── trunks.yaml              # expected allowed VLANs on trunk ports, per role
+├── device_roles.yaml        # expected role for each named device
+├── change-policy.yaml       # agent change governance (auto-approve / require-approval / forbidden)
+└── protected-resources.yaml # VLANs, devices, and interfaces that always require approval
 ```
 
 **`ssot/vlans.yaml`** — example entry:
@@ -152,6 +154,22 @@ devices:
 
 The `devices:` overrides in each file take precedence over role-level defaults,
 letting you express per-device exceptions without touching the shared baseline.
+
+**`ssot/change-policy.yaml`** — agent change governance
+
+Controls which write intents (`add_vlan`, `remove_vlan`, `shutdown_interface`,
+`no_shutdown_interface`, `set_interface_vlan`) the agent may execute autonomously
+and which require explicit user confirmation. Three sections:
+
+- `auto_approve` — ALL listed conditions must be true for the agent to proceed without asking
+- `require_approval` — ANY matching condition triggers an approval prompt before execution
+- `forbidden` — never executed, even if the user says yes (e.g. bulk write scopes)
+
+**`ssot/protected-resources.yaml`** — named exceptions
+
+Lists specific VLANs (1, 10, 20, 30, 100), devices (`sw-core-01`), and trunk
+uplink interfaces that always require approval regardless of `change-policy.yaml`.
+The agent checks this file alongside the change policy before every write intent.
 
 ---
 
@@ -385,9 +403,11 @@ netpulse/
 ├── inventory/
 │   └── devices.yaml
 ├── ssot/
-│   ├── vlans.yaml            # Expected VLANs per role
-│   ├── trunks.yaml           # Expected trunk allowed VLANs per role
-│   └── device_roles.yaml     # Expected role per device
+│   ├── vlans.yaml               # Expected VLANs per role
+│   ├── trunks.yaml              # Expected trunk allowed VLANs per role
+│   ├── device_roles.yaml        # Expected role per device
+│   ├── change-policy.yaml       # Agent change governance (auto-approve / require-approval / forbidden)
+│   └── protected-resources.yaml # Protected VLANs, devices, and interfaces
 ├── output/
 │   ├── backups/              # Config backup files
 │   └── logs/                 # netpulse.log
@@ -415,7 +435,7 @@ netpulse/
 
 | Tag | Location(s) | What it enables |
 |---|---|---|
-| `TODO (approval workflow)` | `openclaw_adapter.py` | Confirmation prompt before `backup_config` or future write actions |
+| ~~`TODO (approval workflow)`~~ | `ssot/change-policy.yaml`, `ssot/protected-resources.yaml`, `skills/netpulse/SKILL.md` | Implemented — agent reads SSOT policy before every write intent and auto-approves or prompts based on defined rules |
 | `TODO (SNMP enrichment)` | `models.py`, `inventory.py`, `snmp_client.py` | SNMP-based reachability and counter enrichment |
 | `TODO (config diff mode)` | `parsers.py` | Normalised config parsing for structured line-by-line diffs |
 | `TODO (Ansible execution path)` | `openclaw_adapter.py` | Route approved write intents to Ansible instead of SSH |

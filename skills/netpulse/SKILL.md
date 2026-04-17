@@ -101,6 +101,21 @@ Do NOT use this skill for:
 
 ---
 
+## SSOT change policy — read before every write intent
+
+Before calling the adapter for any write intent, read and evaluate these two files:
+
+- `ssot/change-policy.yaml` — defines auto_approve, require_approval, and forbidden rules per intent
+- `ssot/protected-resources.yaml` — lists VLANs, devices, and interfaces that always require approval
+
+Decision logic:
+1. If the intent matches a **forbidden** rule → refuse and explain why. Do not call the adapter.
+2. If the request targets a resource in **protected-resources.yaml** → go to step 4.
+3. If ALL conditions in the matching **auto_approve** block are satisfied → call the adapter immediately, no prompt needed.
+4. Otherwise (require_approval condition matches, protected resource, or no auto_approve match) → go to the approval workflow below.
+
+---
+
 ## Approval workflow for write intents
 
 **MANDATORY: Never call the adapter for a write intent without explicit user confirmation.**

@@ -1,0 +1,55 @@
+# NetPulse Protected Resources
+#
+# Any write intent that targets a resource listed here requires explicit user
+# approval, regardless of what change-policy.yaml says.
+# This file is read alongside change-policy.yaml before every write intent.
+
+# ── PROTECTED VLANs ───────────────────────────────────────────────────────────
+# Removing or renaming these VLANs always requires approval.
+
+protected_vlans:
+  - id: "1"
+    name: default
+    reason: "Native VLAN — removal breaks all trunk links"
+  - id: "10"
+    name: MGMT
+    reason: "Management plane — loss of SSH access to all devices"
+  - id: "20"
+    name: SERVERS
+    reason: "Server VLAN — production traffic impact"
+  - id: "30"
+    name: USERS
+    reason: "User VLAN — production traffic impact"
+  - id: "100"
+    name: VOICE
+    reason: "Voice VLAN — real-time traffic, packet loss is critical"
+
+# ── PROTECTED DEVICES ─────────────────────────────────────────────────────────
+# Write intents on these devices always require approval.
+
+protected_devices:
+  - name: sw-core-01
+    role: core
+    reason: "Core switch — any config change affects the entire network"
+    extra_rules:
+      - "shutdown_interface always requires approval on this device regardless of interface type"
+
+# ── PROTECTED INTERFACES ──────────────────────────────────────────────────────
+# Trunk uplinks — shutdown or VLAN change on these always requires approval.
+
+protected_interfaces:
+  - device: sw-core-01
+    interfaces: ["Gi1/0/1", "Gi1/0/2", "Gi1/0/3", "Gi1/0/4"]
+    reason: "Uplinks to distribution layer — trunk interfaces carrying all VLANs"
+
+  - device: sw-dist-01
+    interfaces: ["Gi1/0/1", "Gi1/0/2"]
+    reason: "Uplinks to core layer — trunk interfaces carrying all VLANs"
+
+  - device: sw-acc-01
+    interfaces: ["Gi1/0/1"]
+    reason: "Uplink to distribution layer"
+
+  - device: sw-acc-02
+    interfaces: ["Gi1/0/1"]
+    reason: "Uplink to distribution layer"

@@ -109,6 +109,10 @@ Supported Netmiko platform values: `cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco
 > Device names must be hyphenated with a numeric suffix: `sw-core-01`, `rtr-edge-02`.
 > The `role` field is used for `--role` targeting (e.g. `--role access`).
 
+When adding a new device here, also update:
+- `ssot/device_roles.yaml` — add the role mapping for the new device
+- `ssot/protected-resources.yaml` — add the device's trunk uplink interfaces under `protected_interfaces`
+
 ---
 
 ### Step 6 — Verify everything works
@@ -413,7 +417,10 @@ grep -E "(WARNING|ERROR)" output/logs/netpulse.log | tail -20
 
 ### Add a new device
 
-Edit `inventory/devices.yaml`:
+Follow all four steps — skipping any of them will cause drift check failures or
+incorrect agent behaviour for write intents on the new device.
+
+**Step 1 — Add the device to `inventory/devices.yaml`**
 
 ```yaml
 - name: sw-acc-03
@@ -425,7 +432,31 @@ Edit `inventory/devices.yaml`:
   snmp_enabled: false
 ```
 
-Also update the device table in `skills/netpulse/SKILL.md` and re-sync:
+**Step 2 — Add the role mapping to `ssot/device_roles.yaml`**
+
+```yaml
+devices:
+  sw-acc-03: access
+```
+
+**Step 3 — Add the device's uplink interfaces to `ssot/protected-resources.yaml`**
+
+Under `protected_interfaces`, add an entry for the new device's trunk uplink(s):
+
+```yaml
+protected_interfaces:
+  - device: sw-acc-03
+    interfaces: ["Gi1/0/1"]
+    reason: "Uplink to distribution layer"
+```
+
+This ensures the agent always asks for approval before shutting down or
+reconfiguring trunk ports on the new device.
+
+**Step 4 — Update the skill and re-sync**
+
+Add the new device to the device table in `skills/netpulse/SKILL.md`, then
+push the updated skill to OpenClaw:
 
 ```bash
 cp -r skills/netpulse ~/.openclaw/skills/
