@@ -6,3 +6,4 @@ __pycache__/
 *.pyo
 output/logs/*.log
 output/backups/*.cfg
+output/reports/*.json

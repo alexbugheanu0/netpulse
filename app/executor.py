@@ -22,8 +22,10 @@ To add a new intent:
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
+from app.config import SSH_WORKERS
 from app.inventory import get_all_devices, get_device, get_devices_by_role
 from app.logger import get_logger
 from app.models import IntentRequest, IntentType, JobResult, ScopeType
@@ -145,4 +147,14 @@ def execute(req: IntentRequest, inventory: dict) -> list[JobResult]:
         f"devices={[d.name for d in devices]}"
     )
 
-    return [_timed_run(job_fn, device) for device in devices]
+    # Single device — skip thread-pool overhead entirely.
+    if len(devices) == 1:
+        return [_timed_run(job_fn, devices[0])]
+
+    # Multiple devices — run in parallel while preserving result order.
+    results: list[JobResult | None] = [None] * len(devices)
+    with ThreadPoolExecutor(max_workers=min(SSH_WORKERS, len(devices))) as pool:
+        futures = {pool.submit(_timed_run, job_fn, d): i for i, d in enumerate(devices)}
+        for fut in as_completed(futures):
+            results[futures[fut]] = fut.result()
+    return results  # type: ignore[return-value]

@@ -44,6 +44,7 @@ Activate when the user asks about or requests changes to any of the following. U
 - Combined health summary (version + ports + VLANs) → `health_check`
 - Collect key device facts, port ratio, IOS, uptime → `device_facts`
 - Config backup, save running-config → `backup_config`
+- Config diff, what changed since last backup → `diff_backup`
 - Reachability test, latency, packet loss from device → `ping`
 
 **SSOT Audit / Drift Detection**
@@ -82,6 +83,7 @@ Do NOT use this skill for:
 | `show_port_security` | `show port-security` | Per-interface: max/current secure MACs, violation count, action |
 | `show_logging` | `show logging` | Last 20 syslog entries: timestamp, facility, severity (0–7), mnemonic, message |
 | `backup_config` | `show running-config` | Saves to `output/backups/device_YYYYMMDD_HHMMSS.cfg` |
+| `diff_backup` | local file diff | Changed line count between the two most recent backups |
 | `health_check` | version + interfaces + vlans | Combined health snapshot |
 | `device_facts` | version + interfaces | Platform, IOS, uptime, port ratio |
 | `ping` | `ping <target> repeat 5` | Success rate, min/avg/max RTT |

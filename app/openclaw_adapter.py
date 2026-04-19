@@ -41,9 +41,6 @@ The raw user message should never reach NetPulse directly.
 TODO (SNMP enrichment): Before execution, optionally call snmp_client functions
 to add live interface counters or sysDescr to the response context.
 
-TODO (diff mode): Once diff_backup is added to OPENCLAW_ALLOWED_INTENTS,
-OpenClaw can trigger post-change-window config audits automatically.
-
 TODO (Ansible execution path): For future config-push operations, route the
 intent here to an Ansible runner rather than Netmiko SSH. NetPulse stays
 read-only; Ansible handles approved write actions.
@@ -89,6 +86,7 @@ OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.SHOW_LOGGING,
     # Backup and health
     IntentType.BACKUP_CONFIG,
+    IntentType.DIFF_BACKUP,
     IntentType.HEALTH_CHECK,
     IntentType.PING,
     # SSOT audit intents

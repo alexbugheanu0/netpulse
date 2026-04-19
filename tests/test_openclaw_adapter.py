@@ -144,9 +144,9 @@ def test_allowlist_contains_required_intents():
     assert required <= OPENCLAW_ALLOWED_INTENTS
 
 
-def test_allowlist_excludes_diff_backup():
-    """diff_backup reads local files only but is kept out of the allowlist for now."""
-    assert IntentType.DIFF_BACKUP not in OPENCLAW_ALLOWED_INTENTS
+def test_allowlist_includes_diff_backup():
+    """diff_backup is a local-file-only job and is safe to expose via OpenClaw."""
+    assert IntentType.DIFF_BACKUP in OPENCLAW_ALLOWED_INTENTS
 
 
 # ── Schema validation ──────────────────────────────────────────────────────────
@@ -188,10 +188,15 @@ def test_unknown_intent_rejected():
 
 
 def test_disallowed_intent_rejected():
-    # diff_backup is a valid NetPulse intent but intentionally excluded from OpenClaw
+    """Adapter blocks a recognised IntentType that is not in OPENCLAW_ALLOWED_INTENTS."""
+    import app.openclaw_adapter as oc_mod
+
+    # Temporarily shrink the allowlist so show_vlans is excluded, exercising the
+    # disallowed-intent code path without touching production state.
+    trimmed = frozenset(i for i in oc_mod.OPENCLAW_ALLOWED_INTENTS if i != IntentType.SHOW_VLANS)
     p1, p2, p3 = _patch_all()
-    with p1, p2, p3:
-        resp = run_openclaw({"intent": "diff_backup", "device": "sw-core-01"})
+    with p1, p2, p3, patch.object(oc_mod, "OPENCLAW_ALLOWED_INTENTS", trimmed):
+        resp = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
     assert resp["success"] is False
     assert "not permitted" in resp["error"]
 

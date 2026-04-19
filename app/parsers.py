@@ -27,15 +27,52 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ── Existing parsers ───────────────────────────────────────────────────────────
+# ── ntc-templates helper ───────────────────────────────────────────────────────
+
+def _ntc(platform: str, command: str, raw: str) -> list[dict] | None:
+    """
+    Return ntc-templates parsed output, or None if unavailable or parse fails.
+
+    Callers use the result to replace hand-written parsers; they must fall back
+    to the original implementation when this returns None so that the absence of
+    the ntc-templates package does not break anything.
+    """
+    try:
+        from ntc_templates.parse import parse_output  # type: ignore[import]
+        result = parse_output(platform=platform, command=command, data=raw)
+        return result if result else None
+    except Exception:
+        return None
+
+
+# ── Parsers ────────────────────────────────────────────────────────────────────
 
 def parse_show_interfaces(raw: str) -> list[dict[str, str]]:
     """
     Parse 'show interfaces status' output into a list of port dicts.
 
-    Expected columns: Port, Name, Status, Vlan, Duplex, Speed, Type
-    Lines that don't start with a recognised port token are skipped.
+    Uses ntc-templates when available for reliable column splitting; falls back
+    to line-by-line parsing otherwise.  Output schema is unchanged: port, name,
+    status, vlan, raw.
     """
+    ntc = _ntc("cisco_ios", "show interfaces status", raw)
+    if ntc is not None:
+        return [
+            {
+                "port":   entry.get("port", ""),
+                "name":   entry.get("name", ""),
+                "status": entry.get("status", ""),
+                "vlan":   entry.get("vlan_id", ""),
+                "raw":    (
+                    f"{entry.get('port','')} {entry.get('name','')} "
+                    f"{entry.get('status','')} {entry.get('vlan_id','')}".strip()
+                ),
+            }
+            for entry in ntc
+            if entry.get("port")  # skip empty/header rows
+        ]
+
+    # Fallback: line-by-line
     results: list[dict[str, str]] = []
     for line in raw.splitlines():
         stripped = line.strip()
@@ -57,8 +94,22 @@ def parse_show_vlans(raw: str) -> list[dict[str, str]]:
     """
     Parse 'show vlan brief' output into a list of VLAN dicts.
 
-    Only lines whose first token is a numeric VLAN ID are included.
+    Uses ntc-templates when available; falls back to line-by-line parsing.
+    Output schema: vlan_id, name, status.
     """
+    ntc = _ntc("cisco_ios", "show vlan", raw)
+    if ntc is not None:
+        return [
+            {
+                "vlan_id": entry.get("vlan_id", ""),
+                "name":    entry.get("vlan_name", ""),
+                "status":  entry.get("status", ""),
+            }
+            for entry in ntc
+            if entry.get("vlan_id")  # skip empty/header rows
+        ]
+
+    # Fallback: line-by-line
     results: list[dict[str, str]] = []
     for line in raw.splitlines():
         parts = line.split()
@@ -75,11 +126,35 @@ def parse_show_version(raw: str) -> dict[str, Any]:
     """
     Parse key fields from 'show version' output.
 
-    Returns a dict with software, uptime, hardware, and serial keys
-    where those lines are found. Missing fields are absent — callers
-    should use .get().
+    Uses ntc-templates when available; falls back to line-by-line parsing.
+    Output schema: software, uptime, hardware, serial (all optional — callers
+    should use .get()).
     """
-    result: dict[str, Any] = {}
+    ntc = _ntc("cisco_ios", "show version", raw)
+    # Only use ntc result if it successfully parsed the version number — the
+    # TextFSM pattern may not match all IOS output variants, so we guard on the
+    # key field before committing to the ntc path.
+    if ntc and len(ntc) > 0 and ntc[0].get("version"):
+        entry    = ntc[0]
+        result: dict[str, Any] = {}
+        version  = entry["version"]
+        result["software"] = f"Cisco IOS Software, Version {version}"
+        hostname = entry.get("hostname", "")
+        uptime   = entry.get("uptime", "")
+        if uptime:
+            result["uptime"] = f"{hostname} uptime is {uptime}".strip()
+        hardware = entry.get("hardware", [])
+        if hardware:
+            hw_str = hardware[0] if isinstance(hardware, list) else hardware
+            result["hardware"] = f"cisco {hw_str} processor"
+        serial = entry.get("serial", [])
+        if serial:
+            sn = serial[0] if isinstance(serial, list) else serial
+            result["serial"] = f"Processor board ID {sn}"
+        return result
+
+    # Fallback: line-by-line
+    result = {}
     for line in raw.splitlines():
         lower = line.lower()
         if "cisco ios" in lower or "ios-xe" in lower:

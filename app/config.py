@@ -36,3 +36,8 @@ SSH_PASSWORD: str = os.getenv("NETPULSE_PASSWORD", "")
 SSH_SECRET:   str = os.getenv("NETPULSE_SECRET", "")   # enable secret; optional
 SSH_TIMEOUT:  int = int(os.getenv("NETPULSE_SSH_TIMEOUT", "30"))
 SSH_PORT:     int = int(os.getenv("NETPULSE_SSH_PORT", "22"))
+
+# ── Execution ──────────────────────────────────────────────────────────────────
+# Maximum concurrent SSH threads for multi-device jobs (scope=all / scope=role).
+# Raise if your inventory is large and the server can support more connections.
+SSH_WORKERS: int = int(os.getenv("NETPULSE_SSH_WORKERS", "10"))
