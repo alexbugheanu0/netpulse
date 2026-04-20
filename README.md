@@ -48,7 +48,7 @@ output against the SSOT files you maintain — they never modify device config.
 Clone the project and run the setup wizard — it handles everything in one pass:
 
 ```bash
-git clone <repo-url> netpulse-project
+git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
 cd netpulse-project
 bash scripts/setup.sh
 ```
@@ -69,7 +69,7 @@ bash scripts/add-device.sh
 
 ```bash
 # 1. Clone and enter the project
-git clone <repo-url> netpulse-project
+git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
 cd netpulse-project
 
 # 2. Create and activate a virtual environment
