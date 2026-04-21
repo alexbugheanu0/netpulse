@@ -1,10 +1,29 @@
 # NetPulse
 
-SSH execution backend for [OpenClaw](https://openclaw.ai). Ask natural language
-questions about your Cisco switches from Telegram, WhatsApp, or Discord — NetPulse
-handles the SSH, parsing, and structured responses.
+**Talk to your Cisco switches from chat.** NetPulse is the SSH layer behind [OpenClaw](https://openclaw.ai): you ask in plain language (Telegram, WhatsApp, Discord, or similar), and it runs the right `show` commands, parses the output, and answers with a short summary—no copy-pasting into a terminal.
 
-Install the included skill (`skills/netpulse/SKILL.md`) and the agent does the rest.
+---
+
+## Start here
+
+| If you want to… | Do this |
+|-------------------|---------|
+| **Get running fast** | Run `bash scripts/setup.sh` after cloning (Ubuntu/Debian). It sets up Python, `.env`, and can wire OpenClaw. |
+| **Wire chat to your lab** | Install the skill from `skills/netpulse/` into OpenClaw, set `NETPULSE_*` secrets, then ask questions like “what VLANs are on sw-core-01?”. |
+| **Script or automate** | Use `python3 -m app.main` with `--intent` and `--device` (see [Developer CLI](#developer-cli-appmainpy)). |
+| **Change device config** | Writes are **single-device only**, gated by policy in `ssot/` and (in chat) explicit confirmation. There is no “run arbitrary CLI” path. |
+
+**Important:** Credentials live in `.env` only—never in `inventory/` or git. The app never sends raw user text to SSH; only predefined intents and validated parameters reach the devices.
+
+---
+
+## What NetPulse actually does
+
+1. Loads your devices from `inventory/devices.yaml`.
+2. Maps each request to a **fixed** command (e.g. `show vlan brief` for `show_vlans`)—no free-form Cisco CLI.
+3. Connects over SSH (Netmiko), parses output into structured data, and returns one-line summaries for chat or JSON for scripts.
+
+That keeps behavior predictable and auditable. For deep detail on OpenClaw wiring, see [`OPENCLAW_INTEGRATION.md`](OPENCLAW_INTEGRATION.md) and [`skills/netpulse/SKILL.md`](skills/netpulse/SKILL.md).
 
 ---
 
@@ -12,40 +31,39 @@ Install the included skill (`skills/netpulse/SKILL.md`) and the agent does the r
 
 ### Show / operational
 
-| Intent              | Command run on device              |
-|---------------------|------------------------------------|
-| `show_interfaces`   | `show interfaces status`           |
-| `show_vlans`        | `show vlan brief`                  |
-| `show_trunks`       | `show interfaces trunk`            |
-| `show_version`      | `show version`                     |
-| `show_errors`       | `show interfaces` (error counters) |
-| `show_cdp`          | `show cdp neighbors detail`        |
-| `show_mac`          | `show mac address-table`           |
-| `show_spanning_tree`| `show spanning-tree`               |
-| `ping`              | `ping <target> repeat 5`           |
-| `backup_config`     | `show running-config` → file       |
-| `diff_backup`       | diff two most recent backups       |
-| `health_check`      | version + interfaces + vlans       |
+| Intent | On the device |
+|--------|----------------|
+| `show_interfaces` | `show interfaces status` |
+| `show_vlans` | `show vlan brief` |
+| `show_trunks` | `show interfaces trunk` |
+| `show_version` | `show version` |
+| `show_errors` | `show interfaces` (error counters) |
+| `show_cdp` | `show cdp neighbors detail` |
+| `show_mac` | `show mac address-table` |
+| `show_spanning_tree` | `show spanning-tree` |
+| `ping` | `ping <target> repeat 5` |
+| `backup_config` | `show running-config` → file under `output/backups/` |
+| `diff_backup` | Diff two most recent backups |
+| `health_check` | Version + interfaces + VLANs (one SSH session) |
 
-### SSOT audit
+Additional read intents (routing, ARP, EtherChannel, port security, logging, etc.) are documented in [`skills/netpulse/SKILL.md`](skills/netpulse/SKILL.md) and the OpenClaw allowlist in `app/openclaw_adapter.py`—same pattern: one intent maps to one approved command shape.
 
-| Intent         | What it does                                              |
-|----------------|-----------------------------------------------------------|
-| `audit_vlans`  | Compare device VLANs against `ssot/vlans.yaml`            |
-| `audit_trunks` | Compare trunk allowed VLANs against `ssot/trunks.yaml`    |
-| `device_facts` | Collect platform, IOS version, uptime, port stats          |
-| `drift_check`  | Combined VLAN + trunk audit + device-role check            |
+### SSOT audit (read-only)
 
-All audit intents are read-only. They run `show` commands and compare the
-output against the SSOT files you maintain — they never modify device config.
+| Intent | Purpose |
+|--------|---------|
+| `audit_vlans` | Compare live VLANs to `ssot/vlans.yaml` |
+| `audit_trunks` | Compare trunks to `ssot/trunks.yaml` |
+| `device_facts` | Snapshot: platform, IOS, uptime, ports |
+| `drift_check` | Combined VLAN + trunk + role check |
+
+Audits only **read** the switch and compare to your YAML baselines—they never push config by themselves.
 
 ---
 
 ## Quick start
 
-### Option A — Automated (Ubuntu / Debian, recommended)
-
-Clone the project and run the setup wizard — it handles everything in one pass:
+### Option A — Automated (recommended on Ubuntu / Debian)
 
 ```bash
 git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
@@ -53,429 +71,193 @@ cd netpulse-project
 bash scripts/setup.sh
 ```
 
-The wizard will: install system packages, create the Python venv, prompt for
-SSH credentials (passwords hidden), walk through adding your network devices,
-run the test suite, and optionally install OpenClaw for Telegram/WhatsApp/Discord.
-
-To add or remove devices after the initial setup:
+The script installs dependencies, creates the venv, helps you set SSH credentials, and can add devices. Later, add or remove devices with:
 
 ```bash
 bash scripts/add-device.sh
 ```
 
----
-
-### Option B — Manual setup
+### Option B — Manual
 
 ```bash
-# 1. Clone and enter the project
 git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
 cd netpulse-project
-
-# 2. Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
+cp .env.example .env               # edit NETPULSE_USERNAME / NETPULSE_PASSWORD
+# Edit inventory/devices.yaml with real IPs
+```
 
-# 4. Configure SSH credentials
-cp .env.example .env
-# Edit .env — at minimum set:
-#   NETPULSE_USERNAME=admin
-#   NETPULSE_PASSWORD=yourpassword
+Optional reachability check (TCP port 22 only—**does not** run the intent afterward):
 
-# 5. Set your device IPs
-# Edit inventory/devices.yaml — replace the placeholder IPs with real ones
-
-# 6. (Optional) Verify connectivity before running jobs
+```bash
 python3 -m app.main --intent show_vlans --device sw-core-01 --check
 ```
 
-The `--check` flag runs a TCP port-22 reachability test before opening SSH.
-If connectivity is confirmed, drop `--check` and run the real job.
+Drop `--check` when you want the real job to run.
 
 ---
 
-## .env
+## Environment (`.env`)
 
-```env
-NETPULSE_USERNAME=admin
-NETPULSE_PASSWORD=your_ssh_password
-NETPULSE_SECRET=your_enable_secret   # optional; omit if not using enable
-NETPULSE_SSH_TIMEOUT=30
-NETPULSE_SSH_PORT=22
-```
+Copy [`.env.example`](.env.example) to `.env` and fill in your lab values. At minimum:
 
-Credentials are never stored in YAML or committed to version control.
-`.env` is in `.gitignore`.
+- **`NETPULSE_USERNAME` / `NETPULSE_PASSWORD`** — SSH login  
+- **`NETPULSE_SECRET`** — enable password, if your workflow needs `enable`  
+- **`NETPULSE_SSH_TIMEOUT`** — default **15** seconds (tune per `.env.example` comments)  
+- **`NETPULSE_SSH_PORT`** — usually `22`  
+- **`NETPULSE_SSH_WORKERS`** — concurrency cap for multi-device scopes  
+
+`.env` is gitignored; do not commit it.
 
 ---
 
-## inventory/devices.yaml
+## Inventory (`inventory/devices.yaml`)
+
+Each device needs a name, IP, Netmiko `platform` (e.g. `cisco_ios`), `role`, and `ssh_enabled`. Example:
 
 ```yaml
 devices:
   - name: sw-core-01
     hostname: sw-core-01
     ip: 192.168.100.11
-    platform: cisco_ios        # Netmiko device_type
+    platform: cisco_ios
     role: core
     ssh_enabled: true
-    snmp_enabled: false
 ```
 
-Supported platforms follow Netmiko naming: `cisco_ios`, `cisco_xe`,
-`cisco_nxos`, etc. The `role` field is used for `--role` targeting.
+Roles matter when you use `--role` or `scope=role` from OpenClaw. Full field list and samples stay in the repo’s `inventory/` file.
 
 ---
 
-## ssot/ — SSOT baseline files
+## SSOT folder (`ssot/`)
 
-Five YAML files define what the network *should* look like and how the agent
-is allowed to change it. Edit them to match your lab or production baseline.
+These YAML files describe **what you expect** on the network and **what changes are allowed**:
 
-```
-ssot/
-├── vlans.yaml               # expected VLANs per role (core / distribution / access)
-├── trunks.yaml              # expected allowed VLANs on trunk ports, per role
-├── device_roles.yaml        # expected role for each named device
-├── change-policy.yaml       # agent change governance (auto-approve / require-approval / forbidden)
-└── protected-resources.yaml # VLANs, devices, and interfaces that always require approval
-```
+| File | Role |
+|------|------|
+| `vlans.yaml` | Expected VLANs per role |
+| `trunks.yaml` | Expected trunk / allowed VLANs |
+| `device_roles.yaml` | Which device should be which role |
+| `change-policy.yaml` | When the agent may auto-approve vs must ask vs must refuse |
+| `protected-resources.yaml` | VLANs, devices, and interfaces that are always sensitive |
 
-**`ssot/vlans.yaml`** — example entry:
-
-```yaml
-roles:
-  access:
-    - {id: "1",   name: default}
-    - {id: "10",  name: MGMT}
-    - {id: "20",  name: SERVERS}
-    - {id: "30",  name: USERS}
-    - {id: "100", name: VOICE}
-devices: {}   # optional per-device overrides
-```
-
-**`ssot/trunks.yaml`** — example entry:
-
-```yaml
-roles:
-  access:
-    allowed_vlans: [1, 10, 20, 30, 100]
-    native_vlan: 1
-devices: {}
-```
-
-**`ssot/device_roles.yaml`** — example entry:
-
-```yaml
-devices:
-  sw-core-01: core
-  sw-dist-01: distribution
-  sw-acc-01:  access
-```
-
-The `devices:` overrides in each file take precedence over role-level defaults,
-letting you express per-device exceptions without touching the shared baseline.
-
-**`ssot/change-policy.yaml`** — agent change governance
-
-Controls which write intents (`add_vlan`, `remove_vlan`, `shutdown_interface`,
-`no_shutdown_interface`, `set_interface_vlan`) the agent may execute autonomously
-and which require explicit user confirmation. Three sections:
-
-- `auto_approve` — ALL listed conditions must be true for the agent to proceed without asking
-- `require_approval` — ANY matching condition triggers an approval prompt before execution
-- `forbidden` — never executed, even if the user says yes (e.g. bulk write scopes)
-
-**`ssot/protected-resources.yaml`** — named exceptions
-
-Lists specific VLANs (1, 10, 20, 30, 100), devices (`sw-core-01`), and trunk
-uplink interfaces that always require approval regardless of `change-policy.yaml`.
-The agent checks this file alongside the change policy before every write intent.
+The agent (and validators for write intents) use these for governance before `add_vlan`, `remove_vlan`, or interface changes. Edit the files under `ssot/` to match your environment; see inline comments there for structure.
 
 ---
 
 ## Developer CLI (`app/main.py`)
 
-Use the CLI for setup verification, scripting, automation, and `diff_backup`
-(not exposed via OpenClaw). For everything else, just ask OpenClaw.
+Use this for scripts, CI, or quick checks. Chat users normally go through OpenClaw instead.
 
-### Structured flags
+**Single device**
 
 ```bash
-# Single device
-python3 -m app.main --intent show_vlans          --device sw-core-01
-python3 -m app.main --intent show_errors         --device sw-core-01
-python3 -m app.main --intent show_cdp            --device sw-dist-01
-python3 -m app.main --intent show_mac            --device sw-acc-01
-python3 -m app.main --intent show_spanning_tree  --device sw-core-01
-python3 -m app.main --intent ping                --device sw-core-01 --target 10.0.0.1
-python3 -m app.main --intent backup_config       --device sw-acc-02
-python3 -m app.main --intent diff_backup         --device sw-core-01
+python3 -m app.main --intent show_vlans --device sw-core-01
+python3 -m app.main --intent ping --device sw-core-01 --target 10.0.0.1
+python3 -m app.main --intent backup_config --device sw-acc-02
+```
 
-# All devices (omit --device)
+**All devices or by role**
+
+```bash
 python3 -m app.main --intent health_check
-python3 -m app.main --intent show_errors
-
-# Role-based targeting
-python3 -m app.main --intent show_errors  --role access
-python3 -m app.main --intent health_check --role core
-
-# SSOT audit (structured flags)
-python3 -m app.main --intent audit_vlans   --device sw-core-01
-python3 -m app.main --intent audit_trunks  --device sw-dist-01
-python3 -m app.main --intent device_facts  --device sw-acc-01
-python3 -m app.main --intent drift_check   --device sw-core-01
-python3 -m app.main --intent audit_vlans   --scope all
-python3 -m app.main --intent drift_check   --role access
+python3 -m app.main --intent show_errors --role access
 ```
 
-### Flags
+**Useful flags**
 
-| Flag | Description |
-|---|---|
-| `--role <role>` | Target all SSH-enabled devices with that role |
-| `--target <ip>` | Ping destination IP (required for `--intent ping`) |
-| `--filter <str>` | Only show output lines containing this string |
-| `--format json` | Output results as JSON array (machine-readable) |
-| `--format csv` | Output results as CSV (uses `parsed_data` if available) |
-| `--dry-run` | Show what would run without opening SSH connections |
-| `--check` | TCP port-22 reachability check before running jobs |
-
-```bash
-# Examples
-python3 -m app.main --intent show_errors  --device sw-core-01 --filter Gi1/0/1
-python3 -m app.main --intent health_check --format json > results.json
-python3 -m app.main --intent show_vlans   --role access --format csv
-python3 -m app.main --intent health_check --dry-run
-python3 -m app.main --intent show_vlans   --device sw-core-01 --check
-```
-
-### Exit codes
-
-| Code | Meaning |
+| Flag | Meaning |
 |------|---------|
-| `0`  | All jobs succeeded |
-| `1`  | Startup error (bad inventory / bad flags / validation failure) |
-| `2`  | One or more jobs failed at runtime |
+| `--scope all` | All SSH-enabled devices |
+| `--role <name>` | Only devices with that role |
+| `--target <ip>` | Ping destination (required for `ping`) |
+| `--filter <str>` | Narrow text output |
+| `--format json` / `csv` | Machine-readable output |
+| `--dry-run` | Show what would run, no SSH |
+| `--check` | TCP reachability on port 22 only, then **exit** (no intent execution) |
+
+**Exit codes:** `0` = all jobs OK, `1` = bad args/validation, `2` = runtime job failure.
 
 ---
 
-## Running tests
+## Tests
 
 ```bash
-# From project root with venv active
 pytest tests/ -v
 ```
 
-146 tests — no live devices required. Covers intent parsing, parsers,
-inventory loading, request validation, audit comparison logic, and the
-OpenClaw adapter.
+There are **250** unit tests (no live switches required): intents, parsers, inventory, validation, audits, OpenClaw adapter, and SSH helpers. Run `pytest tests/ --collect-only -q` to confirm the current count.
 
 ---
 
 ## OpenClaw integration
 
-NetPulse ships with a native [OpenClaw](https://openclaw.ai) skill. Once installed,
-you can ask your AI assistant questions like *"what vlans are on sw-core-01?"* or
-*"run a drift check on all access switches"* from Telegram, WhatsApp, or Discord —
-and get a real answer from your switches.
-
-### How it works
-
-OpenClaw reads `skills/netpulse/SKILL.md` at session start. When the user asks a
-network question, the agent builds a JSON payload and calls `app/openclaw_adapter.py`
-via the `exec` tool. The adapter validates the intent, looks up the device in
-inventory, runs the SSH job, and returns clean JSON. The agent presents the
-`results[].summary` field in chat.
-
-### Install the skill
+1. Copy or register `skills/netpulse/` so OpenClaw loads [`SKILL.md`](skills/netpulse/SKILL.md).  
+2. Provide the same env vars as `.env` (e.g. `openclaw secrets set …` or a project `.env`).  
+3. Call the adapter directly to debug:
 
 ```bash
-# Option A — copy to the shared OpenClaw skills folder
-cp -r skills/netpulse ~/.openclaw/skills/
-
-# Option B — add this project's skills/ dir to openclaw.json
-openclaw config set skills.load.extraDirs '["/home/alex/netpulse-project/skills"]'
-```
-
-### Store credentials in OpenClaw
-
-```bash
-openclaw secrets set NETPULSE_USERNAME admin
-openclaw secrets set NETPULSE_PASSWORD yourpassword
-```
-
-Or use a `.env` file at the project root (see the `.env` section above).
-
-### Verify the skill loaded
-
-```bash
-openclaw skills list | grep netpulse
-```
-
-### Test the adapter directly
-
-```bash
-# Valid request — shows what OpenClaw would receive
 python3 -m app.openclaw_adapter --json '{"intent": "show_vlans", "device": "sw-core-01", "scope": "single"}'
-
-# All devices
-python3 -m app.openclaw_adapter --json '{"intent": "health_check", "scope": "all"}'
-
-# Via the shell wrapper (handles venv automatically)
 ./scripts/run_openclaw_netpulse.sh '{"intent": "show_version", "device": "sw-core-01", "scope": "single"}'
-
-# Via stdin
-echo '{"intent": "audit_vlans", "device": "sw-core-01", "scope": "single"}' | ./scripts/run_openclaw_netpulse.sh
 ```
 
-Allowed intents via OpenClaw: `show_interfaces`, `show_vlans`, `show_trunks`,
-`show_version`, `show_errors`, `show_cdp`, `show_mac`, `show_spanning_tree`,
-`show_route`, `show_arp`, `show_etherchannel`, `show_port_security`, `show_logging`,
-`backup_config`, `health_check`, `ping`, `audit_vlans`, `audit_trunks`,
-`device_facts`, `drift_check`.
-
-See [`OPENCLAW_INTEGRATION.md`](OPENCLAW_INTEGRATION.md) for the full integration
-guide and [`skills/netpulse/SKILL.md`](skills/netpulse/SKILL.md) for per-intent
-payload reference.
+Full intent list and payloads: **[`OPENCLAW_INTEGRATION.md`](OPENCLAW_INTEGRATION.md)** and **`skills/netpulse/SKILL.md`**.
 
 ---
 
-## Backup file format
+## Config backups
 
-Config backups are written to `output/backups/`:
+Backups land in `output/backups/` as:
 
-```
-sw-core-01_20260415_143022.cfg
-```
+`<device-name>_YYYYMMDD_HHMMSS.cfg`
 
-Format: `<device-name>_YYYYMMDD_HHMMSS.cfg`
-
-Use `diff_backup` to compare the two most recent backups for a device.
+Use `diff_backup` to compare the two newest files for a device.
 
 ---
 
 ## Extending NetPulse
 
-### Add a new intent
+1. Add an `IntentType` in `app/models.py`.  
+2. Add patterns in `app/intents.py` (for natural language) if needed.  
+3. Add `app/jobs/<name>.py` with `run(device) -> JobResult`.  
+4. Register in `app/executor.py` (and CLI previews in `app/main.py` if you use them).  
+5. For OpenClaw: allowlist in `app/openclaw_adapter.py` and document in `skills/netpulse/SKILL.md`.
 
-1. Add the value to `IntentType` in `app/models.py`.
-2. Add keyword patterns to `INTENT_PATTERNS` in `app/intents.py`.
-3. Create `app/jobs/your_new_job.py` with a `run(device) -> JobResult` function.
-4. Register it in `JOB_MAP` and `COMMAND_PREVIEW` in `app/executor.py` / `app/main.py`.
-5. To expose it via OpenClaw: add it to `OPENCLAW_ALLOWED_INTENTS` in `app/openclaw_adapter.py`
-   and update the intent table in `skills/netpulse/SKILL.md`.
+New platform: set the right Netmiko `device_type` in `devices.yaml`—often no code change.
 
-### Add a device platform
+---
 
-Update the device entry in `devices.yaml` with the correct Netmiko
-`platform` value (`cisco_xe`, `cisco_nxos`, etc.). No code changes needed.
+## Project layout (short)
 
-### Upgrade to TextFSM parsing
-
-In `app/parsers.py`, replace any line-by-line parser with:
-
-```python
-from ntc_templates.parse import parse_output
-parsed = parse_output(platform="cisco_ios", command="show vlan brief", data=raw)
+```
+app/              CLI, executor, SSH, parsers, OpenClaw adapter, validators
+inventory/        devices.yaml
+ssot/             Baseline and policy YAML
+skills/netpulse/  OpenClaw skill
+scripts/          setup.sh, OpenClaw wrapper, add-device
+tests/            Unit tests
+output/           backups/, logs/ (generated; gitignored paths)
 ```
 
 ---
 
-## Project structure
+## Design choices (v1)
 
-```
-netpulse/
-├── app/
-│   ├── main.py               # CLI entry point — arg parsing, dispatch, output
-│   ├── intents.py            # NL query → IntentRequest (keyword/regex router)
-│   ├── validators.py         # Safety checks before any SSH connection opens
-│   ├── executor.py           # Shared job dispatch engine (CLI + OpenClaw)
-│   ├── inventory.py          # Loads devices.yaml → Device objects
-│   ├── ssh_client.py         # Netmiko SSH wrapper — runs pre-approved commands
-│   ├── parsers.py            # Raw CLI output → structured dicts
-│   ├── audit.py              # SSOT comparison logic (pure Python, no SSH)
-│   ├── ssot.py               # SSOT file loader (ssot/*.yaml → typed objects)
-│   ├── formatter.py          # Rich terminal output + JSON/CSV output
-│   ├── summarizer.py         # One-line chat summaries for OpenClaw
-│   ├── openclaw_adapter.py   # OpenClaw integration entry point
-│   ├── models.py             # Pydantic models: Device, IntentRequest, JobResult,
-│   │                         #   AuditStatus, AuditFinding, AuditResult
-│   ├── config.py             # Paths and env var constants
-│   ├── logger.py             # Logging setup (file + stderr)
-│   ├── snmp_client.py        # SNMP scaffold (v1 placeholder)
-│   └── jobs/
-│       ├── show_interfaces.py
-│       ├── show_vlans.py
-│       ├── show_trunks.py
-│       ├── show_version.py
-│       ├── show_errors.py
-│       ├── show_cdp.py
-│       ├── show_mac.py
-│       ├── show_spanning_tree.py
-│       ├── ping.py
-│       ├── backup_config.py
-│       ├── diff_backup.py
-│       ├── health_check.py
-│       ├── audit_vlans.py    # VLAN SSOT audit
-│       ├── audit_trunks.py   # Trunk SSOT audit
-│       ├── device_facts.py   # Collect device facts (no comparison)
-│       └── drift_check.py    # Combined VLAN + trunk + role audit
-├── inventory/
-│   └── devices.yaml
-├── ssot/
-│   ├── vlans.yaml               # Expected VLANs per role
-│   ├── trunks.yaml              # Expected trunk allowed VLANs per role
-│   ├── device_roles.yaml        # Expected role per device
-│   ├── change-policy.yaml       # Agent change governance (auto-approve / require-approval / forbidden)
-│   └── protected-resources.yaml # Protected VLANs, devices, and interfaces
-├── output/
-│   ├── backups/              # Config backup files
-│   └── logs/                 # netpulse.log
-├── skills/
-│   └── netpulse/
-│       └── SKILL.md                # OpenClaw skill — teaches agent how to call NetPulse
-├── scripts/
-│   ├── setup.sh                    # One-command installer wizard (Ubuntu / Debian)
-│   ├── add-device.sh               # Add / remove devices post-install
-│   ├── run_openclaw_netpulse.sh    # Shell wrapper — handles venv, called by exec tool
-│   └── start-openclaw.sh           # Start / stop the OpenClaw gateway
-├── tests/
-│   ├── test_intents.py
-│   ├── test_inventory.py
-│   ├── test_parsers.py
-│   ├── test_validators.py
-│   ├── test_audit.py         # Audit comparison logic + parser helpers
-│   └── test_openclaw_adapter.py
-├── .env.example
-├── OPENCLAW_INTEGRATION.md   # Full OpenClaw integration guide
-├── requirements.txt
-└── README.md
-```
+- No database, no bundled web UI, no Docker requirement  
+- No API server and no LLM calls inside NetPulse itself  
+- No autonomous remediation loops  
+- **No** passing arbitrary CLI strings to devices—only structured intents  
 
 ---
 
-## Future integration points (TODO markers in source)
+## Roadmap hints (see `TODO` in source)
 
-| Tag | Location(s) | What it enables |
-|---|---|---|
-| ~~`TODO (approval workflow)`~~ | `ssot/change-policy.yaml`, `ssot/protected-resources.yaml`, `skills/netpulse/SKILL.md` | Implemented — agent reads SSOT policy before every write intent and auto-approves or prompts based on defined rules |
-| `TODO (SNMP enrichment)` | `models.py`, `inventory.py`, `snmp_client.py` | SNMP-based reachability and counter enrichment |
-| `TODO (config diff mode)` | `parsers.py` | Normalised config parsing for structured line-by-line diffs |
-| `TODO (Ansible execution path)` | `openclaw_adapter.py` | Route approved write intents to Ansible instead of SSH |
+| Area | Notes |
+|------|--------|
+| SNMP | Scaffold exists; enrichment not wired end-to-end |
+| Config diff | Richer parsing for line-by-line diffs |
+| Ansible | Optional path for approved changes instead of direct SSH |
 
----
-
-## Design constraints (v1)
-
-- No database
-- No web frontend
-- No Docker
-- No async framework
-- No API server
-- No LLM API calls
-- No autonomous remediation
-- No free-form CLI forwarded to devices
+Policy and protected resources for writes are enforced in code and YAML; see `ssot/` and `app/validators.py`.

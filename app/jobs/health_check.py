@@ -10,7 +10,7 @@ from __future__ import annotations
 from app.logger import get_logger
 from app.models import Device, JobResult
 from app.parsers import parse_show_interfaces, parse_show_version, parse_show_vlans
-from app.ssh_client import run_command
+from app.ssh_client import run_command, run_commands
 
 logger = get_logger(__name__)
 
@@ -38,14 +38,31 @@ def run(device: Device) -> JobResult:
     collected: dict = {}
     errors: list[str] = []
 
-    for key, command in HEALTH_COMMANDS.items():
-        try:
-            raw = run_command(device, command)
-            collected[key] = PARSERS[key](raw)
-            logger.info(f"Health [{key}] OK on {device.name}")
-        except Exception as exc:
-            logger.warning(f"Health [{key}] FAILED on {device.name}: {exc}")
-            errors.append(f"{key}: {exc}")
+    # Attempt all commands in a single SSH session to avoid paying the TCP
+    # handshake + login cost once per command.  Fall back to individual calls
+    # if the batch session itself fails so partial results are still returned.
+    try:
+        outputs = run_commands(device, list(HEALTH_COMMANDS.values()))
+        for key, command in HEALTH_COMMANDS.items():
+            try:
+                collected[key] = PARSERS[key](outputs[command])
+                logger.info(f"Health [{key}] OK on {device.name}")
+            except Exception as exc:
+                logger.warning(f"Health [{key}] parse FAILED on {device.name}: {exc}")
+                errors.append(f"{key}: {exc}")
+    except Exception as session_exc:
+        logger.warning(
+            f"Batch SSH session failed on {device.name} ({session_exc}), "
+            "falling back to per-command calls"
+        )
+        for key, command in HEALTH_COMMANDS.items():
+            try:
+                raw = run_command(device, command)
+                collected[key] = PARSERS[key](raw)
+                logger.info(f"Health [{key}] OK on {device.name} (fallback)")
+            except Exception as exc:
+                logger.warning(f"Health [{key}] FAILED on {device.name}: {exc}")
+                errors.append(f"{key}: {exc}")
 
     success = len(errors) == 0
 

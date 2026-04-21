@@ -18,7 +18,7 @@ import re
 from app.logger import get_logger
 from app.models import Device, JobResult
 from app.parsers import parse_show_interfaces, parse_show_version
-from app.ssh_client import run_command
+from app.ssh_client import run_command, run_commands
 
 logger = get_logger(__name__)
 
@@ -32,19 +32,35 @@ def run(device: Device) -> JobResult:
     """Collect version + interface facts and return a structured summary."""
     collected: dict = {}
     errors: list[str] = []
+    parsers = {
+        "version":    parse_show_version,
+        "interfaces": parse_show_interfaces,
+    }
 
-    for key, command in COMMANDS.items():
-        try:
-            raw = run_command(device, command)
-            collected[key] = (
-                parse_show_version(raw)
-                if key == "version"
-                else parse_show_interfaces(raw)
-            )
-            logger.info(f"device_facts [{key}] OK on {device.name}")
-        except Exception as exc:
-            logger.warning(f"device_facts [{key}] FAILED on {device.name}: {exc}")
-            errors.append(f"{key}: {exc}")
+    # Attempt both commands in a single SSH session to save one TCP handshake.
+    # Fall back to per-command calls if the batch session itself fails.
+    try:
+        outputs = run_commands(device, list(COMMANDS.values()))
+        for key, command in COMMANDS.items():
+            try:
+                collected[key] = parsers[key](outputs[command])
+                logger.info(f"device_facts [{key}] OK on {device.name}")
+            except Exception as exc:
+                logger.warning(f"device_facts [{key}] parse FAILED on {device.name}: {exc}")
+                errors.append(f"{key}: {exc}")
+    except Exception as session_exc:
+        logger.warning(
+            f"Batch SSH session failed on {device.name} ({session_exc}), "
+            "falling back to per-command calls"
+        )
+        for key, command in COMMANDS.items():
+            try:
+                raw = run_command(device, command)
+                collected[key] = parsers[key](raw)
+                logger.info(f"device_facts [{key}] OK on {device.name} (fallback)")
+            except Exception as exc:
+                logger.warning(f"device_facts [{key}] FAILED on {device.name}: {exc}")
+                errors.append(f"{key}: {exc}")
 
     success = len(errors) < len(COMMANDS)  # at least one command succeeded
 

@@ -7,6 +7,7 @@ see errors in the terminal without losing debug context in the log.
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 from app.config import LOG_FILE
 
@@ -30,8 +31,12 @@ def get_logger(name: str) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Full debug log to file
-    file_handler = logging.FileHandler(LOG_FILE)
+    # Full debug log to rotating file — 5 MB per file, 5 backups (25 MB cap).
+    # Rotation prevents the log from growing unbounded; each file contains
+    # raw device output so keeping more than 25 MB is rarely useful.
+    file_handler = RotatingFileHandler(
+        LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5
+    )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)

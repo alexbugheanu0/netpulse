@@ -38,6 +38,39 @@ class TrunkSSOT:
     devices: dict[str, dict]   # device name → {...} (per-device override)
 
 
+@dataclass
+class ChangePolicy:
+    """
+    Parsed content of ssot/change-policy.yaml.
+
+    auto_approve and require_approval are keyed by intent name and hold the raw
+    condition data from YAML. The forbidden list contains free-form rule strings.
+    Only the forbidden/protected-resource enforcement path is used by the validator;
+    auto_approve vs require_approval is the agent's (SKILL.md) responsibility.
+    """
+
+    auto_approve:     dict[str, Any]  # intent → condition dict
+    require_approval: dict[str, Any]  # intent → condition list
+    forbidden:        list[str]       # free-form rule descriptions
+
+
+@dataclass
+class ProtectedResources:
+    """
+    Parsed content of ssot/protected-resources.yaml.
+
+    Three sections:
+      protected_vlans      — VLANs that must not be removed without approval.
+      protected_devices    — Devices where write intents are always restricted.
+      protected_interfaces — Named trunk/uplink interfaces that must not be
+                             shut down or have their VLAN changed.
+    """
+
+    protected_vlans:      list[dict[str, Any]]  # [{id, name, reason}]
+    protected_devices:    list[dict[str, Any]]  # [{name, role, reason, extra_rules}]
+    protected_interfaces: list[dict[str, Any]]  # [{device, interfaces, reason}]
+
+
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -81,6 +114,26 @@ def load_device_roles() -> dict[str, str]:
     """
     raw = _load_yaml(SSOT_DIR / "device_roles.yaml")
     return raw.get("devices") or {}
+
+
+def load_change_policy() -> ChangePolicy:
+    """Load ssot/change-policy.yaml."""
+    raw = _load_yaml(SSOT_DIR / "change-policy.yaml")
+    return ChangePolicy(
+        auto_approve=raw.get("auto_approve") or {},
+        require_approval=raw.get("require_approval") or {},
+        forbidden=raw.get("forbidden") or [],
+    )
+
+
+def load_protected_resources() -> ProtectedResources:
+    """Load ssot/protected-resources.yaml."""
+    raw = _load_yaml(SSOT_DIR / "protected-resources.yaml")
+    return ProtectedResources(
+        protected_vlans=raw.get("protected_vlans") or [],
+        protected_devices=raw.get("protected_devices") or [],
+        protected_interfaces=raw.get("protected_interfaces") or [],
+    )
 
 
 # ── Lookup helpers ─────────────────────────────────────────────────────────────

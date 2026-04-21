@@ -42,7 +42,13 @@ def _connection_params(device: Device) -> dict:
         "username":    SSH_USERNAME,
         "password":    SSH_PASSWORD,
         "port":        SSH_PORT,
-        "timeout":     SSH_TIMEOUT,
+        # TCP connect timeout only — reachable devices connect in < 2s.
+        # read_timeout is passed per-command in send_command() to keep
+        # the full SSH_TIMEOUT budget for slow 'show' output.
+        "timeout":     min(SSH_TIMEOUT, 8),
+        # Disables Netmiko's inter-command safety delays; saves 1-2s per
+        # connection on Cisco IOS/IOS-XE without affecting output correctness.
+        "fast_cli":    True,
     }
     if SSH_SECRET:
         params["secret"] = SSH_SECRET
@@ -69,6 +75,51 @@ def run_command(device: Device, command: str) -> str:
             output: str = conn.send_command(command, read_timeout=SSH_TIMEOUT)
             logger.debug(f"Response from {device.name}: {len(output)} chars")
             return output
+
+    except NetmikoAuthenticationException as exc:
+        logger.error(f"Auth failed on {device.name} ({device.ip}): {exc}")
+        raise
+
+    except NetmikoTimeoutException as exc:
+        logger.error(f"Timeout on {device.name} ({device.ip}): {exc}")
+        raise
+
+    except Exception as exc:
+        logger.error(f"SSH error on {device.name} ({device.ip}): {exc}")
+        raise
+
+
+def run_commands(device: Device, commands: list[str]) -> dict[str, str]:
+    """
+    Open a single SSH session and run multiple show commands in sequence.
+
+    Returns {command: raw_output} for every command in the list.  Compared
+    to calling run_command() N times, this saves N-1 TCP handshakes + SSH
+    login sequences against the same device — the dominant source of latency
+    for multi-command jobs like health_check and device_facts.
+
+    Raises the same exceptions as run_command() if the session cannot be
+    established.  Individual command failures are not caught here; callers
+    that need per-command resilience should catch exceptions around this call
+    and fall back to run_command() individually.
+    """
+    logger.info(
+        f"SSH → {device.name} ({device.ip}) | "
+        f"{len(commands)} command(s) in one session: {commands}"
+    )
+
+    try:
+        with ConnectHandler(**_connection_params(device)) as conn:
+            if SSH_SECRET:
+                conn.enable()
+            outputs: dict[str, str] = {}
+            for cmd in commands:
+                outputs[cmd] = conn.send_command(cmd, read_timeout=SSH_TIMEOUT)
+                logger.debug(
+                    f"Response from {device.name} [{cmd!r}]: "
+                    f"{len(outputs[cmd])} chars"
+                )
+            return outputs
 
     except NetmikoAuthenticationException as exc:
         logger.error(f"Auth failed on {device.name} ({device.ip}): {exc}")

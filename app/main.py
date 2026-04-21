@@ -33,7 +33,7 @@ Usage — structured flags (always unambiguous):
     python3 -m app.main --intent show_version  --role core           # all core switches
     python3 -m app.main --intent audit_vlans   --device sw-core-01
     python3 -m app.main --intent audit_trunks  --device sw-dist-01
-    python3 -m app.main --intent audit_vlans   --scope all           # all devices
+    python3 -m app.main --intent audit_vlans   --scope all           # all devices (explicit)
     python3 -m app.main --intent device_facts  --device sw-acc-01
     python3 -m app.main --intent drift_check   --device sw-core-01
 
@@ -159,6 +159,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format (default: text)",
     )
     parser.add_argument(
+        "--scope",
+        choices=["single", "all", "role"],
+        help=(
+            "Explicit scope override: single | all | role. "
+            "When omitted, scope is derived from --device (single), "
+            "--role (role), or neither (all)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would run without opening any SSH connections",
@@ -166,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="TCP port-22 reachability check before running jobs",
+        help="TCP port-22 reachability preflight — prints results and exits without running jobs",
     )
     return parser
 
@@ -189,6 +198,10 @@ def resolve_request(args: argparse.Namespace) -> IntentRequest:
             scope = ScopeType.ROLE
         else:
             scope = ScopeType.ALL
+
+        # Explicit --scope overrides the derived value above.
+        if args.scope:
+            scope = ScopeType(args.scope)
 
         return IntentRequest(
             intent=IntentType(args.intent),
@@ -247,10 +260,13 @@ def main() -> None:
         print_error(str(exc))
         sys.exit(1)
 
-    # Step 4: optional TCP reachability pre-check
-    if args.check and args.format == "text":
+    # Step 4: optional TCP reachability pre-check — exits after printing the table.
+    # --check is a preflight-only mode; execution must NOT continue into Step 6.
+    if args.check:
         reachability = check_reachability(inventory)
-        print_reachability_table(inventory, reachability)
+        if args.format == "text":
+            print_reachability_table(inventory, reachability)
+        sys.exit(0)
 
     # Step 5: dry run — show targets and command without connecting
     if args.dry_run:

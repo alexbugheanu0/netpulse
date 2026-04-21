@@ -59,10 +59,16 @@ from app import executor
 from app.inventory import load_inventory
 from app.logger import get_logger
 from app.models import IntentRequest, IntentType, JobResult, ScopeType
+from app.query_filter import FILTERABLE_INTENTS, apply_query
 from app.summarizer import summarize
 from app.validators import validate_request
 
 logger = get_logger("netpulse.openclaw")
+
+# Default sample size returned to OpenClaw when verbose=False. The summary
+# normally contains the answer; parsed_data is a small sample for the agent
+# to inspect. Set verbose=True to opt out of truncation.
+PARSED_DATA_SAMPLE_SIZE = 10
 
 # ── Allowlist ──────────────────────────────────────────────────────────────────
 # Intents exposed to OpenClaw. Read-only intents run freely; write intents
@@ -135,6 +141,9 @@ class OpenClawRequest(BaseModel):
     scope:     str = "single"   # "single" | "all" | "role"
     role:      Optional[str] = None
     raw_query: str = ""          # original user message; logged for audit only
+    # Token-saving knobs — see SKILL.md for full documentation
+    query:   Optional[str] = None  # server-side filter for show_arp/_mac/_route/etc.
+    verbose: bool = False          # when True, return full parsed_data (no truncation)
     # Write intent parameters (ignored for read-only intents)
     vlan_id:   Optional[int] = None   # add_vlan, remove_vlan, set_interface_vlan
     vlan_name: Optional[str] = None   # add_vlan
@@ -142,14 +151,23 @@ class OpenClawRequest(BaseModel):
 
 
 class OpenClawResult(BaseModel):
-    """Result for a single device, shaped for chat/API consumption."""
+    """
+    Result for a single device, shaped for chat/API consumption.
 
-    device:      str
-    success:     bool
-    summary:     str               # one-line, chat-ready — send this to the user
-    parsed_data: Optional[Any] = None
-    elapsed_ms:  Optional[float]  = None
-    error:       Optional[str]    = None
+    `parsed_data` is truncated to PARSED_DATA_SAMPLE_SIZE rows by default to
+    keep Telegram round-trips small. Callers wanting the full table set
+    `verbose: true` in the request; filter-style lookups should use `query`
+    to get exactly the rows they need.
+    """
+
+    device:                  str
+    success:                 bool
+    summary:                 str  # one-line, chat-ready — send this to the user
+    parsed_data:             Optional[Any] = None
+    parsed_data_truncated:   bool = False
+    parsed_data_total_rows:  Optional[int] = None
+    elapsed_ms:              Optional[float] = None
+    error:                   Optional[str]   = None
 
 
 class OpenClawResponse(BaseModel):
@@ -159,13 +177,16 @@ class OpenClawResponse(BaseModel):
     'success' is True only if ALL device results succeeded.
     'error' is set only for pre-execution failures (bad schema, validation,
     inventory problems). Per-device SSH failures appear in results[n].error.
+    `aggregate_summary` is populated only for multi-device responses so the
+    agent can reply with a single line instead of iterating every result.
     """
 
-    success: bool
-    intent:  str
-    scope:   str
-    results: list[OpenClawResult]
-    error:   Optional[str] = None
+    success:            bool
+    intent:             str
+    scope:              str
+    results:            list[OpenClawResult]
+    aggregate_summary:  Optional[str] = None
+    error:              Optional[str] = None
 
 
 # ── Core adapter function ──────────────────────────────────────────────────────
@@ -203,16 +224,30 @@ def run_openclaw(payload: dict) -> dict:
         return _err(intent_str, scope_str, human_msg)
 
     _is_write = intent_str in {i.value for i in WRITE_INTENTS}
+    # Truncate raw_query before logging — it contains the verbatim user
+    # message from Telegram which may include sensitive information.
+    _safe_query = (
+        oc_req.raw_query[:80] + "…" if len(oc_req.raw_query) > 80
+        else oc_req.raw_query
+    )
     logger.info(
         f"OpenClaw request — intent={oc_req.intent!r}, scope={oc_req.scope!r}, "
         f"device={oc_req.device!r}, role={oc_req.role!r}, "
-        f"raw_query={oc_req.raw_query!r}"
+        f"query={oc_req.query!r}, verbose={oc_req.verbose!r}, "
+        f"raw_query={_safe_query!r}"
         + (
             f", vlan_id={oc_req.vlan_id!r}, vlan_name={oc_req.vlan_name!r}, "
             f"interface={oc_req.interface!r} [WRITE]"
             if _is_write else ""
         )
     )
+
+    # `query` is only meaningful on filterable intents; log a gentle note so
+    # the agent can learn when it is wasting a field, but do not error out.
+    if oc_req.query and oc_req.intent not in FILTERABLE_INTENTS:
+        logger.info(
+            f"query={oc_req.query!r} ignored — intent {oc_req.intent!r} is not filterable"
+        )
 
     # ── Step 2: validate scope value ──────────────────────────────────────────
     if oc_req.scope not in _VALID_SCOPES:
@@ -297,23 +332,112 @@ def run_openclaw(payload: dict) -> dict:
         f"{len(results)} result(s), total={total_ms}ms"
     )
 
-    # ── Step 8: build response ─────────────────────────────────────────────────
+    # ── Step 8: build per-device results, applying query + truncation ─────────
+    oc_results: list[OpenClawResult] = []
+    query_active = bool(oc_req.query) and oc_req.intent in FILTERABLE_INTENTS
+    for r in results:
+        # Apply the server-side query filter BEFORE summarising or truncating
+        # so the summary reflects the filtered view and the sample only
+        # contains matching rows.
+        filtered_data = apply_query(oc_req.intent, r.parsed_data, oc_req.query)
+
+        # If a query produced zero matches, produce a direct "no match" summary
+        # rather than running the normal summariser (which would happily report
+        # "0 ARP entries" and mislead the agent).
+        if (
+            r.success
+            and query_active
+            and isinstance(filtered_data, list)
+            and len(filtered_data) == 0
+        ):
+            summary = f"{r.device.upper()}: No match for '{oc_req.query}'."
+        else:
+            summary = summarize(r.model_copy(update={"parsed_data": filtered_data}))
+
+        # Truncate unless the caller explicitly opted into verbose mode.
+        sampled_data, truncated, total = _truncate_parsed_data(
+            filtered_data, oc_req.verbose
+        )
+
+        oc_results.append(OpenClawResult(
+            device=r.device,
+            success=r.success,
+            summary=summary,
+            parsed_data=sampled_data,
+            parsed_data_truncated=truncated,
+            parsed_data_total_rows=total,
+            elapsed_ms=r.elapsed_ms,
+            error=r.error,
+        ))
+
+    aggregate = _build_aggregate_summary(oc_req.intent, oc_results)
+
     return OpenClawResponse(
         success=all_ok,
         intent=oc_req.intent,
         scope=oc_req.scope,
-        results=[
-            OpenClawResult(
-                device=r.device,
-                success=r.success,
-                summary=summarize(r),
-                parsed_data=r.parsed_data,
-                elapsed_ms=r.elapsed_ms,
-                error=r.error,
-            )
-            for r in results
-        ],
+        results=oc_results,
+        aggregate_summary=aggregate,
     ).model_dump()
+
+
+# ── Response-shaping helpers ───────────────────────────────────────────────────
+
+def _truncate_parsed_data(
+    data: Any, verbose: bool
+) -> tuple[Any, bool, Optional[int]]:
+    """
+    Return (sampled_data, truncated_flag, total_rows).
+
+    - If `verbose=True` or `data` is not a list, returns data unchanged.
+    - If `len(data) <= PARSED_DATA_SAMPLE_SIZE`, no truncation.
+    - Otherwise returns the first N rows, truncated=True, total_rows=len(data).
+    """
+    if verbose or not isinstance(data, list):
+        return data, False, None
+    total = len(data)
+    if total <= PARSED_DATA_SAMPLE_SIZE:
+        return data, False, None
+    return data[:PARSED_DATA_SAMPLE_SIZE], True, total
+
+
+def _build_aggregate_summary(intent: str, results: list[OpenClawResult]) -> Optional[str]:
+    """
+    One-line cross-device summary for multi-device responses.
+
+    Populated only when more than one device is present. Keeps token cost low:
+    the agent can reply with just this line when everything is OK and drill
+    into per-device results only when something looks wrong.
+    """
+    if len(results) <= 1:
+        return None
+
+    total  = len(results)
+    failed = [r for r in results if not r.success]
+
+    # Audit intents expose a status via the summary text — surface drift counts.
+    if intent in ("audit_vlans", "audit_trunks", "drift_check"):
+        compliant = sum(
+            1 for r in results
+            if r.success and "compliant" in (r.summary or "").lower()
+        )
+        drifted = [r.device for r in results if r.success and r not in failed
+                   and "compliant" not in (r.summary or "").lower()]
+        parts = [f"{total} device(s)", f"{compliant} compliant"]
+        if drifted:
+            names = ", ".join(drifted[:3])
+            extra = f" (+{len(drifted) - 3} more)" if len(drifted) > 3 else ""
+            parts.append(f"{len(drifted)} drift — {names}{extra}")
+        if failed:
+            parts.append(f"{len(failed)} failed")
+        return "; ".join(parts) + "."
+
+    # Default: OK/failed counts plus the first failing device's error.
+    if failed:
+        first = failed[0]
+        err = (first.error or first.summary or "error")[:80]
+        return f"{total} device(s) — {total - len(failed)} OK, {len(failed)} failed ({first.device}: {err})."
+    return f"{total} device(s) — all OK."
 
 
 def _err(intent: str, scope: str, error: str) -> dict:
@@ -365,7 +489,10 @@ def main() -> None:
         _fatal(f"Invalid JSON input: {exc}.")
 
     response = run_openclaw(payload)
-    print(json.dumps(response, indent=2, default=str))
+    # Compact JSON — no indent, no whitespace after separators. The `exec`
+    # tool pipes this back into the chat context, and every saved byte is a
+    # saved token. Human readers can pipe to `| python -m json.tool` if needed.
+    print(json.dumps(response, separators=(",", ":"), default=str))
 
     if not response.get("success"):
         sys.exit(2)
@@ -373,8 +500,11 @@ def main() -> None:
 
 def _fatal(msg: str) -> None:
     """Print a minimal error envelope to stdout and exit 1."""
-    print(json.dumps({"success": False, "intent": "unknown", "scope": "unknown",
-                      "results": [], "error": msg}, indent=2))
+    print(json.dumps(
+        {"success": False, "intent": "unknown", "scope": "unknown",
+         "results": [], "error": msg},
+        separators=(",", ":"),
+    ))
     sys.exit(1)
 
 

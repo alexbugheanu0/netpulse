@@ -33,7 +33,7 @@ def load_inventory(path: Path = INVENTORY_PATH) -> dict[str, Device]:
     """
     try:
         with open(path) as f:
-            raw = yaml.safe_load(f)
+            raw = yaml.safe_load(f) or {}
     except FileNotFoundError:
         logger.error(f"Inventory file not found: {path}")
         raise
@@ -45,6 +45,11 @@ def load_inventory(path: Path = INVENTORY_PATH) -> dict[str, Device]:
     for entry in raw.get("devices", []):
         try:
             device = Device(**entry)
+            if device.name in devices:
+                logger.warning(
+                    f"Duplicate device name '{device.name}' in inventory — "
+                    "second entry overwrites the first."
+                )
             devices[device.name] = device
         except Exception as exc:
             logger.warning(f"Skipping invalid inventory entry {entry}: {exc}")
@@ -64,8 +69,13 @@ def get_device(name: str, inventory: dict[str, Device]) -> Device:
 
 
 def get_all_devices(inventory: dict[str, Device]) -> list[Device]:
-    """Return all devices from inventory as a list."""
-    return list(inventory.values())
+    """Return all SSH-enabled devices from inventory.
+
+    Filters for ssh_enabled=True to match the behaviour of
+    get_devices_by_role() and avoid silently attempting SSH connections
+    against devices that are not eligible for them.
+    """
+    return [d for d in inventory.values() if d.ssh_enabled]
 
 
 def get_devices_by_role(role: str, inventory: dict[str, Device]) -> list[Device]:

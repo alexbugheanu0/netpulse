@@ -36,9 +36,14 @@ def summarize(result: JobResult) -> str:
     data   = result.parsed_data
 
     if intent == "show_interfaces":
-        ports     = data if isinstance(data, list) else []
-        connected = [p for p in ports if "connected" in p.get("status", "")]
-        return f"{device}: {len(ports)} port(s), {len(connected)} connected."
+        ports       = data if isinstance(data, list) else []
+        connected   = [p for p in ports if "connected" in p.get("status", "")]
+        err_disabled = [p for p in ports if "err-disabled" in p.get("status", "").lower()]
+        suffix      = f", {len(err_disabled)} err-disabled" if err_disabled else ""
+        return (
+            f"{device}: {len(ports)} port(s), "
+            f"{len(connected)} connected{suffix}."
+        )
 
     if intent == "show_vlans":
         vlans = data if isinstance(data, list) else []
@@ -73,8 +78,7 @@ def summarize(result: JobResult) -> str:
         return f"{device}: No CDP neighbours found."
 
     if intent == "show_mac":
-        entries = data if isinstance(data, list) else []
-        return f"{device}: {len(entries)} MAC address table entry/entries."
+        return _mac_summary(device, data)
 
     if intent == "show_spanning_tree":
         ports    = data if isinstance(data, list) else []
@@ -88,13 +92,22 @@ def summarize(result: JobResult) -> str:
         return _route_summary(device, data)
 
     if intent == "show_arp":
-        entries = data if isinstance(data, list) else []
+        entries    = data if isinstance(data, list) else []
         incomplete = [e for e in entries if "incomplete" in e.get("mac", "").lower()]
+        local      = [e for e in entries if e.get("age") == "-"]
+        dynamic    = len(entries) - len(local) - len(incomplete)
         if incomplete:
             ips = ", ".join(e["ip"] for e in incomplete[:3])
             extra = f" (+{len(incomplete)-3} more)" if len(incomplete) > 3 else ""
-            return f"{device}: {len(entries)} ARP entries — {len(incomplete)} INCOMPLETE ({ips}{extra})."
-        return f"{device}: {len(entries)} ARP entries, all resolved."
+            return (
+                f"{device}: {len(entries)} ARP entries "
+                f"({len(local)} local, {dynamic} dynamic) — "
+                f"{len(incomplete)} INCOMPLETE ({ips}{extra})."
+            )
+        return (
+            f"{device}: {len(entries)} ARP entries "
+            f"({len(local)} local, {dynamic} dynamic), all resolved."
+        )
 
     if intent == "show_etherchannel":
         return _etherchannel_summary(device, data)
@@ -245,20 +258,55 @@ def _device_facts_summary(device: str, data) -> str:
 
 
 def _route_summary(device: str, data) -> str:
-    """Total routes by protocol; flag missing default route."""
+    """Total routes by protocol; flag missing default route and show its next-hop."""
     routes = data if isinstance(data, list) else []
     if not routes:
         return f"{device}: No routes in routing table."
 
-    has_default = any(r.get("prefix") == "0.0.0.0" for r in routes)
+    default = next((r for r in routes if r.get("prefix") == "0.0.0.0"), None)
     by_proto: dict[str, int] = {}
     for r in routes:
         p = r.get("protocol", "?")
         by_proto[p] = by_proto.get(p, 0) + 1
 
     proto_str = ", ".join(f"{k}:{v}" for k, v in sorted(by_proto.items()))
-    default_flag = "" if has_default else " — WARNING: no default route"
+
+    if default is None:
+        default_flag = " — WARNING: no default route"
+    else:
+        nh = default.get("next_hop") or default.get("interface") or "?"
+        default_flag = f" — default via {nh}"
+
     return f"{device}: {len(routes)} routes ({proto_str}){default_flag}."
+
+
+def _mac_summary(device: str, data) -> str:
+    """
+    MAC table summary: total entries, top-3 ports by MAC count, and a flag
+    for any port with >200 MACs (likely a hub or unmanaged switch downstream).
+    """
+    entries = data if isinstance(data, list) else []
+    if not entries:
+        return f"{device}: MAC address table is empty."
+
+    counts: dict[str, int] = {}
+    for e in entries:
+        port = e.get("port") or "?"
+        counts[port] = counts.get(port, 0) + 1
+
+    top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    top_str = ", ".join(f"{p}:{n}" for p, n in top)
+    flooded = [p for p, n in counts.items() if n > 200]
+
+    flood_flag = ""
+    if flooded:
+        names = ", ".join(flooded[:2])
+        flood_flag = f" — WARNING: {len(flooded)} port(s) with >200 MACs ({names})"
+
+    return (
+        f"{device}: {len(entries)} MAC entries across {len(counts)} port(s) — "
+        f"top: {top_str}{flood_flag}."
+    )
 
 
 def _etherchannel_summary(device: str, data) -> str:
@@ -269,7 +317,8 @@ def _etherchannel_summary(device: str, data) -> str:
 
     _PROBLEM = {"D", "s", "H", "I", "u"}
     parts: list[str] = []
-    for b in bundles:
+    shown = bundles[:2]
+    for b in shown:
         members = b.get("member_ports", [])
         problem = [m for m in members if any(f in m.get("flags", "") for f in _PROBLEM)]
         bundled = [m for m in members if "P" in m.get("flags", "")]
@@ -282,7 +331,8 @@ def _etherchannel_summary(device: str, data) -> str:
             f"Group {b['group']} {b.get('port_channel','')} "
             f"[{b.get('protocol','')}] {status} {len(bundled)}/{len(members)} bundled{prob_str}"
         )
-    return f"{device}: " + "; ".join(parts) + "."
+    extra = f" (+{len(bundles) - 2} more)" if len(bundles) > 2 else ""
+    return f"{device}: " + "; ".join(parts) + extra + "."
 
 
 def _port_security_summary(device: str, data) -> str:
@@ -315,7 +365,7 @@ def _logging_summary(device: str, data) -> str:
     critical = [e for e in entries if e.get("severity_code", 7) <= 3]
     if critical:
         last = critical[-1]
-        msg = last.get("message", "")[:80]
+        msg = last.get("message", "")[:60]
         return (
             f"{device}: {len(critical)} severity≤ERROR in last {len(entries)} entries — "
             f"last: %{last['facility']}-{last['severity_code']}-{last['mnemonic']}: {msg}"

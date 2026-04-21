@@ -433,3 +433,205 @@ def test_backup_config_summary_shows_filename_not_full_path():
     assert "sw-core-01_20260415_120000.cfg" in summary
     # Should NOT show the full absolute path prefix
     assert "/home/alex" not in summary
+
+
+# ── parsed_data truncation (default) and verbose opt-out ───────────────────────
+
+def _make_arp_result(n: int) -> JobResult:
+    """JobResult with an ARP parsed_data list of length n."""
+    return JobResult(
+        success=True,
+        device="sw-core-01",
+        intent="show_arp",
+        command_executed="show ip arp",
+        parsed_data=[
+            {
+                "protocol":  "Internet",
+                "ip":        f"10.0.0.{i}",
+                "age":       "5",
+                "mac":       f"aabb.cc00.{i:04x}",
+                "type":      "ARPA",
+                "interface": "Gi0/1",
+            }
+            for i in range(1, n + 1)
+        ],
+        raw_output="",
+        elapsed_ms=100.0,
+    )
+
+
+def test_parsed_data_truncated_by_default():
+    """Without verbose=True, parsed_data is capped at PARSED_DATA_SAMPLE_SIZE rows."""
+    p1, p2, p3 = _patch_all(results=[_make_arp_result(25)])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_arp", "device": "sw-core-01"})
+    r = resp["results"][0]
+    assert len(r["parsed_data"]) == 10
+    assert r["parsed_data_truncated"] is True
+    assert r["parsed_data_total_rows"] == 25
+
+
+def test_parsed_data_untruncated_when_small_enough():
+    """Lists already <= 10 rows are returned unchanged with no truncation flag."""
+    p1, p2, p3 = _patch_all(results=[_make_arp_result(5)])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_arp", "device": "sw-core-01"})
+    r = resp["results"][0]
+    assert len(r["parsed_data"]) == 5
+    assert r["parsed_data_truncated"] is False
+    assert r["parsed_data_total_rows"] is None
+
+
+def test_parsed_data_full_when_verbose_true():
+    """verbose=True disables truncation entirely."""
+    p1, p2, p3 = _patch_all(results=[_make_arp_result(25)])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent":  "show_arp",
+            "device":  "sw-core-01",
+            "verbose": True,
+        })
+    r = resp["results"][0]
+    assert len(r["parsed_data"]) == 25
+    assert r["parsed_data_truncated"] is False
+    assert r["parsed_data_total_rows"] is None
+
+
+def test_dict_parsed_data_not_truncated():
+    """health_check's dict parsed_data must not be mangled by truncation."""
+    p1, p2, p3 = _patch_all(results=[HEALTH_RESULT])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "health_check", "scope": "all"})
+    r = resp["results"][0]
+    # Still a dict with the original keys
+    assert isinstance(r["parsed_data"], dict)
+    assert "interfaces" in r["parsed_data"]
+    assert r["parsed_data_truncated"] is False
+
+
+# ── Server-side query filter ───────────────────────────────────────────────────
+
+def test_query_filter_matches_single_arp_entry():
+    p1, p2, p3 = _patch_all(results=[_make_arp_result(10)])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_arp",
+            "device": "sw-core-01",
+            "query":  "10.0.0.3",
+        })
+    rows = resp["results"][0]["parsed_data"]
+    assert len(rows) == 1
+    assert rows[0]["ip"] == "10.0.0.3"
+
+
+def test_query_filter_zero_matches_returns_empty_and_no_match_summary():
+    p1, p2, p3 = _patch_all(results=[_make_arp_result(10)])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_arp",
+            "device": "sw-core-01",
+            "query":  "192.168.99.99",
+        })
+    r = resp["results"][0]
+    assert r["parsed_data"] == []
+    assert "no match" in r["summary"].lower()
+    assert "192.168.99.99" in r["summary"]
+
+
+def test_query_filter_on_non_filterable_intent_is_noop():
+    """`query` is ignored on intents that don't support filtering."""
+    p1, p2, p3 = _patch_all(results=[VLAN_RESULT])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_vlans",
+            "device": "sw-core-01",
+            "query":  "whatever",
+        })
+    # parsed_data should be untouched (2 VLANs returned from mock)
+    assert len(resp["results"][0]["parsed_data"]) == 2
+
+
+def test_query_filter_on_show_route_by_prefix():
+    routes = JobResult(
+        success=True,
+        device="sw-core-01",
+        intent="show_route",
+        command_executed="show ip route",
+        parsed_data=[
+            {"protocol": "S",  "prefix": "0.0.0.0",  "mask": "0", "next_hop": "10.0.0.1"},
+            {"protocol": "C",  "prefix": "10.0.0.0", "mask": "24"},
+            {"protocol": "O",  "prefix": "10.10.0.0", "mask": "24", "next_hop": "10.0.0.5"},
+        ],
+        elapsed_ms=50.0,
+    )
+    p1, p2, p3 = _patch_all(results=[routes])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_route",
+            "device": "sw-core-01",
+            "query":  "10.10.0.0/24",
+        })
+    rows = resp["results"][0]["parsed_data"]
+    assert len(rows) == 1
+    assert rows[0]["prefix"] == "10.10.0.0"
+
+
+# ── aggregate_summary ──────────────────────────────────────────────────────────
+
+def test_aggregate_summary_absent_on_single_result():
+    p1, p2, p3 = _patch_all()
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
+    assert resp["aggregate_summary"] is None
+
+
+def test_aggregate_summary_all_ok():
+    r1 = VLAN_RESULT
+    r2 = VLAN_RESULT.model_copy(update={"device": "sw-dist-01"})
+    p1, p2, p3 = _patch_all(results=[r1, r2])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_vlans", "scope": "all"})
+    agg = resp["aggregate_summary"]
+    assert agg is not None
+    assert "2 device" in agg
+    assert "OK" in agg
+
+
+def test_aggregate_summary_reports_failure_device():
+    ok = VLAN_RESULT
+    bad = JobResult(
+        success=False,
+        device="sw-acc-02",
+        intent="show_vlans",
+        command_executed="show vlan brief",
+        error="Connection timed out",
+    )
+    p1, p2, p3 = _patch_all(results=[ok, bad])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_vlans", "scope": "all"})
+    agg = resp["aggregate_summary"]
+    assert "sw-acc-02" in agg
+    assert "1 failed" in agg
+
+
+# ── OpenClawRequest schema ─────────────────────────────────────────────────────
+
+def test_openclaw_request_accepts_query_and_verbose():
+    """The new fields default correctly and accept explicit values."""
+    req = OpenClawRequest(intent="show_arp", device="sw-core-01")
+    assert req.query is None
+    assert req.verbose is False
+
+    req2 = OpenClawRequest(
+        intent="show_arp",
+        device="sw-core-01",
+        query="10.0.0.5",
+        verbose=True,
+    )
+    assert req2.query == "10.0.0.5"
+    assert req2.verbose is True
+
+
+def test_openclaw_response_includes_aggregate_summary_field():
+    """aggregate_summary must be a declared field on the response model."""
+    assert "aggregate_summary" in OpenClawResponse.model_fields
