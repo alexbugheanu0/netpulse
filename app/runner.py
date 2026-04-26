@@ -40,11 +40,12 @@ def run_request(
     risk_decision = classify_intent(normalized_intent, run_params)
     _apply_risk_to_plan(plan, risk_decision)
 
-    plan_path = save_plan(plan)
     audit = start_audit(plan, risk_decision)
     audit_path: Path | None = None
+    plan_path: Path | None = None
 
     try:
+        plan_path = save_plan(plan)
         record_precheck(audit, "plan_saved", {"path": str(plan_path)})
         record_precheck(audit, "risk_classification", risk_decision.model_dump())
 
@@ -299,7 +300,7 @@ def _response(
     status: str,
     plan: ExecutionPlan,
     risk_decision: RiskDecision,
-    plan_path: Path,
+    plan_path: Path | None,
     audit_path: Path | None,
     execution_results: list[Any] | None = None,
     verification: dict[str, Any] | None = None,
@@ -314,7 +315,7 @@ def _response(
         "plan": serialize_plan(plan),
         "risk_decision": risk_decision.model_dump(),
         "approval_required": risk_decision.approval_required,
-        "plan_path": str(plan_path),
+        "plan_path": str(plan_path) if plan_path else None,
         "audit_path": str(audit_path) if audit_path else None,
         "execution_results": _jsonable(execution_results or []),
         "verification": _jsonable(verification),

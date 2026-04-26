@@ -101,7 +101,7 @@ def classify_intent(
 
     intent_name = _normalise_intent(intent)
 
-    if intent_name in READ_ONLY_INTENTS or _looks_read_only(intent_name):
+    if intent_name in READ_ONLY_INTENTS:
         return RiskDecision(
             risk=RiskLevel.READ_ONLY,
             approval_required=False,
@@ -154,9 +154,10 @@ def _looks_read_only(intent: str) -> bool:
 
 
 def _requires_approval(intent: str) -> bool:
-    # Demo-only mock preparation is allowed without human approval because it has
-    # no external side effects. Real network write intents still require approval.
-    return intent not in {"prepare_lab_environment", "prepare_instrument_mock"}
+    # The Genesis demo is a deterministic readiness workflow with no external
+    # side effects. Every actual read/write adapter intent still follows the
+    # normal approval default for writes.
+    return intent != "prepare_lab_environment"
 
 
 def _protected_resource_decision(

@@ -71,6 +71,25 @@ def test_risk_classification_protected_vlan_blocks_remove():
     assert decision.allowed is False
 
 
+def test_risk_blocks_unknown_read_like_intents():
+    decision = classify_intent("check_reload_status_and_fix", {})
+
+    assert decision.risk == RiskLevel.BLOCKED
+    assert decision.allowed is False
+
+
+def test_mock_write_intent_requires_approval_by_default():
+    decision = classify_intent(
+        "prepare_instrument_mock",
+        {"domain": "instrument"},
+        ssot={"protected_vlans": [], "protected_devices": [], "protected_interfaces": []},
+    )
+
+    assert decision.risk == RiskLevel.LOW_CHANGE
+    assert decision.approval_required is True
+    assert decision.allowed is True
+
+
 def test_audit_artifact_is_written(tmp_path):
     plan = build_plan("show_vlans", {"device": "sw-core-01"})
     risk = classify_intent("show_vlans", {})
@@ -83,6 +102,24 @@ def test_audit_artifact_is_written(tmp_path):
     assert path.exists()
     assert data["request_id"] == plan.request_id
     assert data["final_status"] == "success"
+
+
+def test_runner_saves_audit_when_plan_save_fails(monkeypatch, tmp_path):
+    from app import audit_log as audit_mod
+
+    monkeypatch.setattr("app.runner.save_plan", lambda plan: (_ for _ in ()).throw(RuntimeError("disk full")))
+    monkeypatch.setattr("app.runner.save_audit", lambda audit: audit_mod.save_audit(audit, tmp_path / "audit"))
+
+    result = run_request(
+        original_request="show vlans",
+        normalized_intent="show_vlans",
+        params={"device": "sw-core-01", "scope": "single"},
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["plan_path"] is None
+    assert Path(result["audit_path"]).exists()
 
 
 def test_runner_dry_run_does_not_execute(monkeypatch, tmp_path):
@@ -99,6 +136,22 @@ def test_runner_dry_run_does_not_execute(monkeypatch, tmp_path):
     assert result["success"] is True
     assert result["status"] == "dry_run"
     assert result["execution_results"] == []
+    assert Path(result["audit_path"]).exists()
+
+
+def test_runner_validation_failure_still_writes_audit(monkeypatch, tmp_path):
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: {})
+
+    result = run_request(
+        original_request="show vlans on missing switch",
+        normalized_intent="show_vlans",
+        params={"device": "sw-missing-01", "scope": "single"},
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert "not found in inventory" in result["error"]
     assert Path(result["audit_path"]).exists()
 
 
@@ -120,6 +173,7 @@ def test_runner_requires_approval_before_write_execution(monkeypatch, tmp_path):
 
 def test_genesis_demo_intent_completes_successfully(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("real inventory used")))
 
     result = run_request(
         original_request="Prepare the lab environment for simulation job demo-001.",

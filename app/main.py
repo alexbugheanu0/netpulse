@@ -263,14 +263,7 @@ def main() -> None:
     if args.format == "text":
         print_banner()
 
-    # Step 1: load inventory
-    try:
-        inventory = load_inventory()
-    except Exception as exc:
-        print_error(f"Failed to load inventory: {exc}")
-        sys.exit(1)
-
-    # Step 2: resolve intent (NL or structured flags)
+    # Step 1: resolve intent (NL or structured flags)
     try:
         req = resolve_request(args)
     except ValueError as exc:
@@ -284,22 +277,21 @@ def main() -> None:
             f"Scope: {req.scope.value}"
         )
 
-    # Step 3: validate request against inventory
-    try:
-        validate_request(req, inventory)
-    except ValueError as exc:
-        print_error(str(exc))
-        sys.exit(1)
-
-    # Step 4: optional TCP reachability pre-check — exits after printing the table.
+    # Step 2: optional TCP reachability pre-check — exits after printing the table.
     # --check is a preflight-only mode; execution must NOT continue into Step 6.
     if args.check:
+        try:
+            inventory = load_inventory()
+            validate_request(req, inventory)
+        except Exception as exc:
+            print_error(str(exc))
+            sys.exit(1)
         reachability = check_reachability(inventory)
         if args.format == "text":
             print_reachability_table(inventory, reachability)
         sys.exit(0)
 
-    # Step 5: dry run — generate a plan and audit artifact without connecting
+    # Step 3: dry run — generate a plan and audit artifact without connecting
     if args.dry_run:
         runner_result = run_request(
             original_request=req.raw_query,
@@ -317,7 +309,7 @@ def main() -> None:
             print_info(f"Audit: {runner_result['audit_path']}")
         sys.exit(0)
 
-    # Step 6: execute via the safe lifecycle runner
+    # Step 4: execute via the safe lifecycle runner
     runner_result = run_request(
         original_request=req.raw_query,
         normalized_intent=req.intent.value,
@@ -336,7 +328,7 @@ def main() -> None:
 
     results = [_job_result_from_dict(item) for item in runner_result.get("execution_results", [])]
 
-    # Step 7: apply output filter (keeps lines matching filter_str)
+    # Step 5: apply output filter (keeps lines matching filter_str)
     if args.filter_str:
         results = [
             r.model_copy(update={
@@ -348,7 +340,7 @@ def main() -> None:
             for r in results
         ]
 
-    # Step 8: display results
+    # Step 6: display results
     if args.format == "json":
         print(json.dumps(runner_result, indent=2, default=str))
     elif args.format == "csv":
