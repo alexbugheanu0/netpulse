@@ -96,10 +96,19 @@ JOB_MAP: dict[IntentType, Callable] = {
 }
 
 
-def _timed_run(job_fn: Callable, device) -> JobResult:
+def _timed_run(job_fn: Callable, device, intent: IntentType | None = None) -> JobResult:
     """Run job_fn(device) and attach wall-clock elapsed_ms to the result."""
     start   = time.monotonic()
-    result  = job_fn(device)
+    try:
+        result = job_fn(device)
+    except Exception as exc:
+        result = JobResult(
+            success=False,
+            device=device.name,
+            intent=intent.value if intent else "unknown",
+            command_executed="",
+            error=str(exc),
+        )
     elapsed = (time.monotonic() - start) * 1000
     return result.model_copy(update={"elapsed_ms": round(elapsed, 1)})
 
@@ -149,12 +158,12 @@ def execute(req: IntentRequest, inventory: dict) -> list[JobResult]:
 
     # Single device — skip thread-pool overhead entirely.
     if len(devices) == 1:
-        return [_timed_run(job_fn, devices[0])]
+        return [_timed_run(job_fn, devices[0], req.intent)]
 
     # Multiple devices — run in parallel while preserving result order.
     results: list[JobResult | None] = [None] * len(devices)
     with ThreadPoolExecutor(max_workers=min(SSH_WORKERS, len(devices))) as pool:
-        futures = {pool.submit(_timed_run, job_fn, d): i for i, d in enumerate(devices)}
+        futures = {pool.submit(_timed_run, job_fn, d, req.intent): i for i, d in enumerate(devices)}
         for fut in as_completed(futures):
             results[futures[fut]] = fut.result()
     return results  # type: ignore[return-value]

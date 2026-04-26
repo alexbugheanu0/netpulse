@@ -1,0 +1,6 @@
+job_id: demo-001
+request: Prepare the lab environment for simulation job demo-001.
+dataset: demo-dataset
+storage_path: /mnt/demo
+compute_nodes_requested: 2
+instrument_profile: demo

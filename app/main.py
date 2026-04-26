@@ -53,10 +53,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
-from app import executor
-from app.executor import JOB_MAP
+from app import executor  # imported for compatibility with existing tests/tools
 from app.formatter import (
     print_banner,
     print_error,
@@ -69,13 +69,12 @@ from app.formatter import (
 )
 from app.inventory import (
     check_reachability,
-    get_all_devices,
-    get_devices_by_role,
     load_inventory,
 )
 from app.intents import parse_intent
 from app.logger import get_logger
 from app.models import IntentRequest, IntentType, ScopeType
+from app.runner import run_request
 from app.validators import validate_request
 
 logger = get_logger(__name__)
@@ -225,6 +224,38 @@ def resolve_request(args: argparse.Namespace) -> IntentRequest:
     )
 
 
+def _runner_params(req: IntentRequest) -> dict:
+    """Convert the existing CLI request model into runner parameters."""
+
+    return {
+        "device": req.device,
+        "scope": req.scope.value,
+        "role": req.role,
+        "ping_target": req.ping_target,
+        "raw_query": req.raw_query,
+        "vlan_id": req.vlan_id,
+        "vlan_name": req.vlan_name,
+        "interface": req.interface,
+    }
+
+
+def _job_result_from_dict(data: dict) -> "JobResult":
+    """Rehydrate runner output for the existing CLI formatters."""
+
+    from app.models import JobResult
+
+    return JobResult(
+        success=bool(data.get("success")),
+        device=str(data.get("device") or data.get("adapter") or "netpulse"),
+        intent=str(data.get("intent") or "unknown"),
+        command_executed=str(data.get("command_executed") or data.get("summary") or ""),
+        parsed_data=data.get("parsed_data"),
+        raw_output=str(data.get("raw_output") or data.get("summary") or ""),
+        error=data.get("error"),
+        elapsed_ms=data.get("elapsed_ms"),
+    )
+
+
 def main() -> None:
     parser = build_parser()
     args   = parser.parse_args()
@@ -268,31 +299,42 @@ def main() -> None:
             print_reachability_table(inventory, reachability)
         sys.exit(0)
 
-    # Step 5: dry run — show targets and command without connecting
+    # Step 5: dry run — generate a plan and audit artifact without connecting
     if args.dry_run:
-        command = COMMAND_PREVIEW.get(req.intent, req.intent.value)
-        if req.intent == IntentType.PING:
-            command = f"ping {req.ping_target} repeat 5"
-        print_info(f"[DRY RUN] Command: {command!r}")
-
-        if req.scope == ScopeType.SINGLE:
-            target_devices = [inventory[req.device]]  # type: ignore[index]
-        elif req.scope == ScopeType.ROLE:
-            target_devices = get_devices_by_role(req.role, inventory)  # type: ignore[arg-type]
+        runner_result = run_request(
+            original_request=req.raw_query,
+            normalized_intent=req.intent.value,
+            params=_runner_params(req),
+            source="cli",
+            dry_run=True,
+        )
+        if args.format == "json":
+            print(json.dumps(runner_result, indent=2, default=str))
         else:
-            target_devices = get_all_devices(inventory)
-
-        for d in target_devices:
-            print_info(f"  → {d.name} ({d.ip})")
+            for step in runner_result["plan"]["steps"]:
+                print_info(f"[DRY RUN] {step['action']} → {step['target']}: {step.get('command_preview')}")
+            print_info(f"Plan: {runner_result['plan_path']}")
+            print_info(f"Audit: {runner_result['audit_path']}")
         sys.exit(0)
 
-    # Step 6: execute via shared executor
-    try:
-        results = executor.execute(req, inventory)
-    except Exception as exc:
-        print_error(f"Unexpected error during job execution: {exc}")
-        logger.exception("Unhandled error in executor.execute()")
+    # Step 6: execute via the safe lifecycle runner
+    runner_result = run_request(
+        original_request=req.raw_query,
+        normalized_intent=req.intent.value,
+        params=_runner_params(req),
+        source="cli",
+    )
+
+    if not runner_result["success"] and not runner_result.get("execution_results"):
+        if args.format == "json":
+            print(json.dumps(runner_result, indent=2, default=str))
+        else:
+            print_error(runner_result.get("error") or runner_result["status"])
+            if runner_result.get("audit_path"):
+                print_info(f"Audit: {runner_result['audit_path']}")
         sys.exit(1)
+
+    results = [_job_result_from_dict(item) for item in runner_result.get("execution_results", [])]
 
     # Step 7: apply output filter (keeps lines matching filter_str)
     if args.filter_str:
@@ -308,7 +350,7 @@ def main() -> None:
 
     # Step 8: display results
     if args.format == "json":
-        print_results_json(results)
+        print(json.dumps(runner_result, indent=2, default=str))
     elif args.format == "csv":
         print_results_csv(results)
     else:

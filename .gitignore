@@ -7,3 +7,7 @@ __pycache__/
 output/logs/*.log
 output/backups/*.cfg
 output/reports/*.json
+output/audit/
+output/plans/
+output/*_errors.json
+.openclaw/

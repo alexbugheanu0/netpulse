@@ -1,63 +1,89 @@
 # NetPulse
 
-**Talk to your Cisco switches from chat.** NetPulse is the SSH layer behind [OpenClaw](https://openclaw.ai): you ask in plain language (Telegram, WhatsApp, Discord, or similar), and it runs the right `show` commands, parses the output, and answers with a short summary—no copy-pasting into a terminal.
+NetPulse is an AI-safe execution control plane for infrastructure operations. It turns natural-language intent into structured, policy-checked, approved, verified, and auditable actions across network devices today, with a path toward compute, storage, and lab systems.
 
----
+Current domain: Cisco network operations.
 
-## Start here
+Architecture goal: safe AI-driven infrastructure orchestration.
 
-| If you want to… | Do this |
+Core loop:
+
+```text
+intent -> plan -> risk check -> approval -> execute -> verify -> audit
+```
+
+## Why NetPulse
+
+AI agents are useful for operations only when execution is bounded. NetPulse keeps the agent away from arbitrary CLI and forces every request through fixed intents, typed parameters, policy checks, explicit approval gates, post-change verification, and JSON audit artifacts.
+
+## Architecture
+
+OpenClaw, CLI, and future integrations call the unified runner in `app/runner.py`. The runner builds an execution plan, classifies risk, checks approval state, routes to an adapter, verifies write actions, and saves an audit artifact.
+
+The current production adapter wraps existing Cisco IOS jobs in `app/jobs/`. Demo adapters for compute, storage, and instruments live under `app/adapters/` and return deterministic mock data.
+
+## Safety Model
+
+- No arbitrary CLI execution.
+- Every request maps to a fixed intent and validated parameters.
+- Every request gets an execution plan before execution.
+- Read-only intents run without approval.
+- Write and high-risk intents require approval unless they are demo-only mocks.
+- Existing SSOT and protected-resource policy remains enforced.
+- Write actions get post-change verification where supported.
+- Every lifecycle path writes a JSON audit artifact.
+
+## Execution Lifecycle
+
+1. Receive natural-language or structured request.
+2. Normalize to a supported intent.
+3. Generate an execution plan with steps and expected outputs.
+4. Classify risk and evaluate SSOT/protected-resource policy.
+5. Stop if blocked, or return an approval-required response when needed.
+6. Execute through the selected adapter.
+7. Verify write results.
+8. Save the audit artifact and return structured proof.
+
+## Risk Levels
+
+- `READ_ONLY` - show, check, get, read, audit, and diagnostic intents.
+- `LOW_CHANGE` - low-impact fixed changes such as `add_vlan`, subject to policy.
+- `MEDIUM_CHANGE` - state-changing operations such as VLAN removal or access VLAN changes.
+- `HIGH_RISK` - interface shutdown, trunk/routing/default-gateway/core-uplink style changes.
+- `BLOCKED` - unknown intents, arbitrary CLI, or forbidden protected-resource actions.
+
+## Audit Artifacts
+
+Plans are written under `output/plans/`. Audit reports are written under `output/audit/YYYY-MM-DD/<request_id>.json` and include request metadata, plan, risk decision, approval state, prechecks, execution results, postchecks, errors, final status, and duration.
+
+## Genesis-Style Demo
+
+Run the mock multi-domain demo without real Cisco devices:
+
+```bash
+python demos/genesis_style/run_demo.py
+```
+
+It simulates: "Prepare the lab environment for simulation job demo-001."
+
+## Current Limitations
+
+Production execution is still focused on Cisco IOS network operations. Compute, storage, and instrument adapters are mock-only. Verification is implemented for current VLAN/interface write intents and will grow as more write intents are added.
+
+## Roadmap
+
+See [`ROADMAP.md`](ROADMAP.md) for the phased path from safety control plane to multi-domain adapters and Genesis-style research workflows.
+
+## Start Here
+
+| If you want to... | Do this |
 |-------------------|---------|
 | **Get running fast** | Run `bash scripts/setup.sh` after cloning (Ubuntu/Debian). It sets up Python, `.env`, and can wire OpenClaw. |
 | **Wire chat to your lab** | Install the skill from `skills/netpulse/` into OpenClaw, set `NETPULSE_*` secrets, then ask questions like “what VLANs are on sw-core-01?”. |
 | **Script or automate** | Use `python3 -m app.main` with `--intent` and `--device` (see [Developer CLI](#developer-cli-appmainpy)). |
-| **Change device config** | Writes are **single-device only**, gated by policy in `ssot/` and (in chat) explicit confirmation. There is no “run arbitrary CLI” path. |
+| **Change device config** | Writes are **single-device only**, gated by risk, policy, and explicit confirmation. There is no “run arbitrary CLI” path. |
 
-**Important:** Credentials live in `.env` only—never in `inventory/` or git. The app never sends raw user text to SSH; only predefined intents and validated parameters reach the devices.
-
----
-
-## What NetPulse actually does
-
-1. Loads your devices from `inventory/devices.yaml`.
-2. Maps each request to a **fixed** command (e.g. `show vlan brief` for `show_vlans`)—no free-form Cisco CLI.
-3. Connects over SSH (Netmiko), parses output into structured data, and returns one-line summaries for chat or JSON for scripts.
-
-That keeps behavior predictable and auditable. For deep detail on OpenClaw wiring, see [`OPENCLAW_INTEGRATION.md`](OPENCLAW_INTEGRATION.md) and [`skills/netpulse/SKILL.md`](skills/netpulse/SKILL.md).
-
----
-
-## Supported intents
-
-### Show / operational
-
-| Intent | On the device |
-|--------|----------------|
-| `show_interfaces` | `show interfaces status` |
-| `show_vlans` | `show vlan brief` |
-| `show_trunks` | `show interfaces trunk` |
-| `show_version` | `show version` |
-| `show_errors` | `show interfaces` (error counters) |
-| `show_cdp` | `show cdp neighbors detail` |
-| `show_mac` | `show mac address-table` |
-| `show_spanning_tree` | `show spanning-tree` |
-| `ping` | `ping <target> repeat 5` |
-| `backup_config` | `show running-config` → file under `output/backups/` |
-| `diff_backup` | Diff two most recent backups |
-| `health_check` | Version + interfaces + VLANs (one SSH session) |
-
-Additional read intents (routing, ARP, EtherChannel, port security, logging, etc.) are documented in [`skills/netpulse/SKILL.md`](skills/netpulse/SKILL.md) and the OpenClaw allowlist in `app/openclaw_adapter.py`—same pattern: one intent maps to one approved command shape.
-
-### SSOT audit (read-only)
-
-| Intent | Purpose |
-|--------|---------|
-| `audit_vlans` | Compare live VLANs to `ssot/vlans.yaml` |
-| `audit_trunks` | Compare trunks to `ssot/trunks.yaml` |
-| `device_facts` | Snapshot: platform, IOS, uptime, ports |
-| `drift_check` | Combined VLAN + trunk + role check |
-
-Audits only **read** the switch and compare to your YAML baselines—they never push config by themselves.
+Credentials live in `.env` only, never in `inventory/` or git. The app never sends raw user text to SSH; only predefined intents and validated parameters reach devices.
 
 ---
 
@@ -196,11 +222,11 @@ There are **250** unit tests (no live switches required): intents, parsers, inve
 
 1. Copy or register `skills/netpulse/` so OpenClaw loads [`SKILL.md`](skills/netpulse/SKILL.md).  
 2. Provide the same env vars as `.env` (e.g. `openclaw secrets set …` or a project `.env`).  
-3. Call the adapter directly to debug:
+3. Call this repository's NetPulse OpenClaw wrapper to debug:
 
 ```bash
-python3 -m app.openclaw_adapter --json '{"intent": "show_vlans", "device": "sw-core-01", "scope": "single"}'
-./scripts/run_openclaw_netpulse.sh '{"intent": "show_version", "device": "sw-core-01", "scope": "single"}'
+./scripts/run_openclaw_netpulse.sh '{"intent": "show_vlans", "device": "sw-core-01", "scope": "single", "response_mode": "telegram"}'
+./scripts/run_openclaw_netpulse.sh '{"intent": "show_version", "device": "sw-core-01", "scope": "single", "response_mode": "telegram"}'
 ```
 
 Full intent list and payloads: **[`OPENCLAW_INTEGRATION.md`](OPENCLAW_INTEGRATION.md)** and **`skills/netpulse/SKILL.md`**.
@@ -261,3 +287,13 @@ output/           backups/, logs/ (generated; gitignored paths)
 | Ansible | Optional path for approved changes instead of direct SSH |
 
 Policy and protected resources for writes are enforced in code and YAML; see `ssot/` and `app/validators.py`.
+
+---
+
+## License
+
+License: Apache-2.0
+
+NetPulse is licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [`LICENSE`](LICENSE) for the full text and [`NOTICE`](NOTICE) for copyright attribution.
+
+NetPulse is open source for learning, labs, and infrastructure automation research. Production use requires your own testing, security review, credential handling, and approval process.

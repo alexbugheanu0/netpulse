@@ -1,20 +1,64 @@
 ---
 name: netpulse
-description: Cisco switch diagnostic and config engine — VLANs, trunks, STP, CDP, MAC table, ARP, routing, EtherChannel, port security, syslog, config backup, SSOT audit, drift check. Read and write SSH access to real devices. Write operations require Telegram confirmation before execution.
+description: AI-safe execution control plane for Cisco network operations. Uses fixed intents only, generates an execution plan, classifies risk, gates approval, executes through adapters, verifies writes, and returns audit-backed proof. Arbitrary CLI is forbidden.
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "os": ["linux", "darwin"]}}
 ---
 
-# NetPulse — Cisco Diagnostics & Configuration
+# NetPulse — AI-Safe Infrastructure Execution
 
-Run structured diagnostics and config changes against Cisco switches via SSH.
-Every request maps to a hardcoded command — no raw CLI ever reaches a device.
-Read intents run immediately. Write intents require explicit user confirmation
-in chat before the adapter is called.
+Run structured diagnostics and approved config changes against Cisco switches via SSH.
+Every request maps to a fixed intent and typed parameters. No raw CLI ever reaches
+a device. NetPulse generates a plan before execution, classifies risk, requires
+approval for write/high-risk actions, verifies write actions after execution, and
+saves audit artifacts.
 
 For per-intent anomaly thresholds, diagnostic chaining playbooks ("port not
 passing traffic", "link keeps flapping", etc.), and full payload examples,
 read [`skills/netpulse/REFERENCE.md`](REFERENCE.md) on demand. Do NOT preload
 it — keep token usage low.
+
+---
+
+## Execution lifecycle rules
+
+- Never execute arbitrary CLI.
+- Always use a fixed intent from the allowed list.
+- Generate a plan before execution.
+- Classify risk before execution.
+- Require approval for write or high-risk actions.
+- Verify after write actions.
+- Save audit artifacts.
+- Return proof: plan, risk, result evidence, verification, and audit path.
+
+Core loop:
+
+```text
+intent -> plan -> risk check -> approval -> execute -> verify -> audit
+```
+
+---
+
+## Telegram privacy and final-only replies
+
+Telegram must receive only the final user-facing answer. Never send interim
+status such as "Working...", tool calls, command lines, stdout/stderr, JSON
+payloads, plan objects, risk objects, audit objects, chain-of-thought, or
+reasoning text.
+
+Never reveal or quote environment variables, `.env` contents, OpenClaw secrets,
+SSH credentials, `NETPULSE_PASSWORD`, `NETPULSE_SECRET`, device passwords, or
+enable secrets. If a credential problem occurs, say only that credentials need
+to be checked.
+
+For every Telegram call:
+
+- Set `response_mode` to `telegram`.
+- Keep `verbose` as `false` unless the user explicitly asks for table detail.
+- Use `query` for narrow lookups instead of asking for full tables.
+- Send only `aggregate_summary` for multi-device responses.
+- Send only `results[0].summary` for single-device responses.
+- Do not paste NetPulse JSON into Telegram unless the user explicitly asks for
+  raw JSON.
 
 ---
 
@@ -53,17 +97,20 @@ Write intents (`scope=single` only — require approval):
 | `no_shutdown_interface` | `interface` (str), `device` |
 | `set_interface_vlan` | `interface` (str), `vlan_id` (int), `device` |
 
-Do NOT use this skill for arbitrary CLI or any intent not in the list above.
+Do NOT use the netpulse skill for arbitrary CLI or any intent not in the list above.
 
 ---
 
 ## How to call NetPulse
 
+Use this repository's NetPulse OpenClaw wrapper. Do not call any other skill or
+external wrapper.
+
 ```bash
 /home/alex/netpulse-project/scripts/run_openclaw_netpulse.sh 'PAYLOAD'
 ```
 
-Or directly:
+Developer-only local debug path, not for OpenClaw chat routing:
 
 ```bash
 cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.openclaw_adapter --json 'PAYLOAD'
@@ -80,6 +127,12 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
   "scope":       "single | all | role",
   "role":        "<role name — required when scope=role>",
   "ping_target": "<IPv4 — required when intent=ping>",
+  "dry_run": false,
+  "approval_received": false,
+  "request_id": "<optional id from caller>",
+  "user": "<optional user/chat identity>",
+  "source": "openclaw",
+  "response_mode": "telegram",
   "query":       "<optional server-side filter>",
   "verbose":     false,
   "vlan_id":     0,
@@ -98,6 +151,12 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
 
 **Prefer `scope=single` unless the user says "every/all/network-wide".**
 Multi-device calls multiply token cost linearly.
+If the user names a role such as core, distribution, or access, prefer
+`scope=role` over `scope=all`.
+
+For Telegram and other chat channels, set `response_mode` to `telegram`.
+This keeps the adapter response compact while preserving plan and audit
+artifacts on disk.
 
 ### Token-saving knobs
 
@@ -152,12 +211,18 @@ NEVER invent a device name. If the user names a device not in this table, say so
 
 - Reply with the `summary` field ONLY. Do not add explanation, context,
   or background unless the user explicitly asks for it.
+- Do NOT send "Working...", tool output, shell commands, stdout/stderr, JSON
+  payloads, plan/risk/audit objects, or any chain-of-thought/reasoning text.
+- Do NOT reveal `.env`, OpenClaw secrets, environment variables, passwords, or
+  enable secrets. Never include `NETPULSE_PASSWORD` or `NETPULSE_SECRET` values.
 - Do NOT reference previous questions or earlier conversation history.
 - Do NOT suggest follow-up commands unless the user asks "what should I
   check next?" or equivalent.
 - If the answer is one sentence, send one sentence. Do not pad.
 - For multi-device responses use `aggregate_summary` as the entire reply.
   Expand to per-device detail only if the user asks about a specific device.
+- For Telegram calls, set `response_mode: "telegram"` and keep `verbose: false`
+  unless the user explicitly asks for raw table detail.
 
 Wrong:  "Based on your earlier question about VLAN 10, I can see that..."
 Right:  "SW-CORE-01: 3 VLANs — 1, 10, 20."
@@ -209,8 +274,10 @@ original request. See REFERENCE.md examples 11–15 for the full payload shapes.
 - NEVER invent a device name. Only use names from the inventory table.
 - NEVER pass raw Cisco CLI. Use only this adapter with valid intents.
 - NEVER use an intent not in the allowed list.
+- NEVER skip plan generation, risk classification, verification, or audit reporting.
 - For `scope=all`, omit `device`.
 - For `scope=role`, set `role` to `core`, `distribution`, or `access`.
 - `ping_target` is required only when `intent=ping`.
 - Write intents are `scope=single` only — bulk writes are forbidden.
-- NEVER execute a write intent without explicit Telegram confirmation.
+- NEVER execute a write or high-risk intent without explicit Telegram confirmation.
+- Return the audit path and verification evidence when reporting a completed change.

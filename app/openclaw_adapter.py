@@ -9,12 +9,11 @@ OpenClaw must NEVER:
   - bypass this adapter to call ssh_client directly
   - pass user free-text to intents.py (it must classify first)
 
-Call modes:
-    # Explicit JSON string
-    python3 -m app.openclaw_adapter --json '{"intent": "show_vlans", "device": "sw-core-01"}'
+OpenClaw call mode:
+    ./scripts/run_openclaw_netpulse.sh '{"intent": "show_vlans", "device": "sw-core-01"}'
 
-    # JSON from stdin (pipe-friendly)
-    echo '{"intent": "health_check", "scope": "all"}' | python3 -m app.openclaw_adapter
+Developer-only direct module call:
+    python3 -m app.openclaw_adapter --json '{"intent": "show_vlans", "device": "sw-core-01"}'
 
 Request → Response flow:
     OpenClaw JSON
@@ -49,6 +48,7 @@ read-only; Ansible handles approved write actions.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from typing import Any, Optional
@@ -58,8 +58,10 @@ from pydantic import BaseModel, ValidationError
 from app import executor
 from app.inventory import load_inventory
 from app.logger import get_logger
-from app.models import IntentRequest, IntentType, JobResult, ScopeType
+from app.models import IntentType, JobResult, ScopeType
 from app.query_filter import FILTERABLE_INTENTS, apply_query
+from app.redaction import redact_data, redact_text
+from app.runner import run_request
 from app.summarizer import summarize
 from app.validators import validate_request
 
@@ -144,10 +146,17 @@ class OpenClawRequest(BaseModel):
     # Token-saving knobs — see SKILL.md for full documentation
     query:   Optional[str] = None  # server-side filter for show_arp/_mac/_route/etc.
     verbose: bool = False          # when True, return full parsed_data (no truncation)
+    response_mode: str = "full"    # "full" for APIs, "telegram" for compact chat replies
+    dry_run: bool = False
+    approval_received: bool = False
+    request_id: Optional[str] = None
+    user: Optional[str] = None
+    source: Optional[str] = "openclaw"
     # Write intent parameters (ignored for read-only intents)
     vlan_id:   Optional[int] = None   # add_vlan, remove_vlan, set_interface_vlan
     vlan_name: Optional[str] = None   # add_vlan
     interface: Optional[str] = None   # shutdown_interface, no_shutdown_interface, set_interface_vlan
+    ping_target: Optional[str] = None  # ping
 
 
 class OpenClawResult(BaseModel):
@@ -187,6 +196,13 @@ class OpenClawResponse(BaseModel):
     results:            list[OpenClawResult]
     aggregate_summary:  Optional[str] = None
     error:              Optional[str] = None
+    status:             Optional[str] = None
+    request_id:         Optional[str] = None
+    plan:               Optional[dict[str, Any]] = None
+    risk_decision:      Optional[dict[str, Any]] = None
+    approval_required:  bool = False
+    plan_path:          Optional[str] = None
+    audit_path:         Optional[str] = None
 
 
 # ── Core adapter function ──────────────────────────────────────────────────────
@@ -230,10 +246,12 @@ def run_openclaw(payload: dict) -> dict:
         oc_req.raw_query[:80] + "…" if len(oc_req.raw_query) > 80
         else oc_req.raw_query
     )
+    _safe_query = redact_text(_safe_query)
     logger.info(
         f"OpenClaw request — intent={oc_req.intent!r}, scope={oc_req.scope!r}, "
         f"device={oc_req.device!r}, role={oc_req.role!r}, "
         f"query={oc_req.query!r}, verbose={oc_req.verbose!r}, "
+        f"response_mode={oc_req.response_mode!r}, "
         f"raw_query={_safe_query!r}"
         + (
             f", vlan_id={oc_req.vlan_id!r}, vlan_name={oc_req.vlan_name!r}, "
@@ -277,62 +295,58 @@ def run_openclaw(payload: dict) -> dict:
         logger.warning(f"Disallowed intent blocked: {oc_req.intent!r}")
         return _err(oc_req.intent, oc_req.scope, msg)
 
-    # ── Step 4: load inventory ─────────────────────────────────────────────────
-    try:
-        inventory = load_inventory()
-    except FileNotFoundError as exc:
-        logger.error(f"Inventory file not found: {exc}")
-        return _err(oc_req.intent, oc_req.scope, f"Inventory file not found: {exc}.")
-    except Exception as exc:
-        logger.error(f"Inventory load failed: {exc}")
-        return _err(oc_req.intent, oc_req.scope, f"Failed to load inventory: {exc}.")
-
-    # ── Step 5: build IntentRequest and validate ───────────────────────────────
-    intent_req = IntentRequest(
-        intent=intent_type,
-        device=oc_req.device,
-        scope=ScopeType(oc_req.scope),
-        role=oc_req.role,
-        raw_query=oc_req.raw_query or f"openclaw:{oc_req.intent}",
-        # Write intent parameters — None for read-only intents
-        vlan_id=oc_req.vlan_id,
-        vlan_name=oc_req.vlan_name,
-        interface=oc_req.interface,
+    # ── Step 4: run the safe lifecycle ─────────────────────────────────────────
+    runner_result = run_request(
+        original_request=oc_req.raw_query or f"openclaw:{oc_req.intent}",
+        normalized_intent=oc_req.intent,
+        params={
+            "request_id": oc_req.request_id,
+            "device": oc_req.device,
+            "scope": oc_req.scope,
+            "role": oc_req.role,
+            "raw_query": oc_req.raw_query,
+            "query": oc_req.query,
+            "vlan_id": oc_req.vlan_id,
+            "vlan_name": oc_req.vlan_name,
+            "interface": oc_req.interface,
+            "ping_target": oc_req.ping_target,
+            "_inventory_loader": load_inventory,
+            "_validate_request": validate_request,
+            "_executor_execute": executor.execute,
+        },
+        user=oc_req.user,
+        source=oc_req.source or "openclaw",
+        dry_run=oc_req.dry_run,
+        approval_received=oc_req.approval_received,
     )
 
-    try:
-        validate_request(intent_req, inventory)
-    except ValueError as exc:
-        logger.warning(f"Validation failed: {exc}")
-        return _err(oc_req.intent, oc_req.scope, str(exc))
-
-    logger.info("Validation passed — dispatching to executor")
-
-    # ── Step 6: execute ────────────────────────────────────────────────────────
-    try:
-        results: list[JobResult] = executor.execute(intent_req, inventory)
-    except Exception as exc:
-        logger.error(f"Executor raised unexpectedly: {exc}", exc_info=True)
-        return _err(oc_req.intent, oc_req.scope, f"Unexpected execution error: {exc}.")
-
-    # ── Step 7: log per-device outcomes ───────────────────────────────────────
-    all_ok = all(r.success for r in results)
-    for r in results:
-        if r.success:
-            logger.info(
-                f"  {r.device}: OK"
-                + (f" ({r.elapsed_ms:.0f}ms)" if r.elapsed_ms else "")
-            )
-        else:
-            logger.warning(f"  {r.device}: FAILED — {r.error}")
+    results = [_job_result_from_dict(item) for item in runner_result.get("execution_results", [])]
+    all_ok = bool(runner_result.get("success"))
 
     total_ms = round((time.monotonic() - _t0) * 1000, 1)
     logger.info(
-        f"OpenClaw complete — intent={oc_req.intent!r}, success={all_ok}, "
-        f"{len(results)} result(s), total={total_ms}ms"
+        f"OpenClaw complete — intent={oc_req.intent!r}, status={runner_result.get('status')}, "
+        f"success={all_ok}, {len(results)} result(s), total={total_ms}ms"
     )
 
-    # ── Step 8: build per-device results, applying query + truncation ─────────
+    if not results:
+        response = OpenClawResponse(
+            success=all_ok,
+            intent=oc_req.intent,
+            scope=oc_req.scope,
+            results=[],
+            error=runner_result.get("error"),
+            status=runner_result.get("status"),
+            request_id=runner_result.get("request_id"),
+            plan=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("plan"),
+            risk_decision=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("risk_decision"),
+            approval_required=bool(runner_result.get("approval_required")),
+            plan_path=runner_result.get("plan_path"),
+            audit_path=runner_result.get("audit_path"),
+        )
+        return _safe_response(response, oc_req.response_mode)
+
+    # ── Step 5: build per-device results, applying query + truncation ─────────
     oc_results: list[OpenClawResult] = []
     query_active = bool(oc_req.query) and oc_req.intent in FILTERABLE_INTENTS
     for r in results:
@@ -372,13 +386,22 @@ def run_openclaw(payload: dict) -> dict:
 
     aggregate = _build_aggregate_summary(oc_req.intent, oc_results)
 
-    return OpenClawResponse(
+    response = OpenClawResponse(
         success=all_ok,
         intent=oc_req.intent,
         scope=oc_req.scope,
         results=oc_results,
         aggregate_summary=aggregate,
-    ).model_dump()
+        status=runner_result.get("status"),
+        request_id=runner_result.get("request_id"),
+        plan=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("plan"),
+        risk_decision=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("risk_decision"),
+        approval_required=bool(runner_result.get("approval_required")),
+        plan_path=runner_result.get("plan_path"),
+        audit_path=runner_result.get("audit_path"),
+        error=None if results else runner_result.get("error"),
+    )
+    return _safe_response(response, oc_req.response_mode)
 
 
 # ── Response-shaping helpers ───────────────────────────────────────────────────
@@ -414,6 +437,7 @@ def _build_aggregate_summary(intent: str, results: list[OpenClawResult]) -> Opti
 
     total  = len(results)
     failed = [r for r in results if not r.success]
+    ok_count = total - len(failed)
 
     # Audit intents expose a status via the summary text — surface drift counts.
     if intent in ("audit_vlans", "audit_trunks", "drift_check"):
@@ -432,6 +456,27 @@ def _build_aggregate_summary(intent: str, results: list[OpenClawResult]) -> Opti
             parts.append(f"{len(failed)} failed")
         return "; ".join(parts) + "."
 
+    if intent == "show_interfaces":
+        return _aggregate_interfaces(results, failed, ok_count, total)
+
+    if intent == "show_vlans":
+        return _aggregate_list_count(results, failed, ok_count, total, "VLAN")
+
+    if intent == "show_errors":
+        return _aggregate_errors(results, failed, ok_count, total)
+
+    if intent == "health_check":
+        return _aggregate_health(results, failed, ok_count, total)
+
+    if intent == "device_facts":
+        return _aggregate_device_facts(results, failed, ok_count, total)
+
+    if intent == "show_version":
+        return _aggregate_versions(results, failed, ok_count, total)
+
+    if intent == "show_trunks":
+        return _aggregate_trunks(results, failed, ok_count, total)
+
     # Default: OK/failed counts plus the first failing device's error.
     if failed:
         first = failed[0]
@@ -440,15 +485,195 @@ def _build_aggregate_summary(intent: str, results: list[OpenClawResult]) -> Opti
     return f"{total} device(s) — all OK."
 
 
+def _aggregate_suffix(failed: list[OpenClawResult], ok_count: int, total: int) -> str:
+    if not failed:
+        return ""
+    first = failed[0]
+    err = (first.error or first.summary or "error")[:80]
+    return f"; {ok_count}/{total} OK, {len(failed)} failed ({first.device}: {err})"
+
+
+def _aggregate_interfaces(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    port_count = connected = err_disabled = 0
+    for result in results:
+        rows = result.parsed_data if result.success and isinstance(result.parsed_data, list) else []
+        port_count += len(rows)
+        connected += sum(1 for row in rows if "connected" in str(row.get("status", "")).lower())
+        err_disabled += sum(1 for row in rows if "err-disabled" in str(row.get("status", "")).lower())
+    suffix = f", {err_disabled} err-disabled" if err_disabled else ""
+    return f"{total} device(s): {connected}/{port_count} ports connected{suffix}{_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_list_count(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+    label: str,
+) -> str:
+    count = sum(
+        len(result.parsed_data)
+        for result in results
+        if result.success and isinstance(result.parsed_data, list)
+    )
+    return f"{total} device(s): {count} {label}(s) found across {ok_count} OK device(s){_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_errors(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    error_ports: list[str] = []
+    for result in results:
+        rows = result.parsed_data if result.success and isinstance(result.parsed_data, list) else []
+        for row in rows:
+            if row.get("input_errors", 0) > 0 or row.get("output_errors", 0) > 0:
+                error_ports.append(f"{result.device}:{row.get('port', '?')}")
+    if error_ports:
+        shown = ", ".join(error_ports[:4])
+        more = f" (+{len(error_ports) - 4} more)" if len(error_ports) > 4 else ""
+        return f"{total} device(s): {len(error_ports)} port(s) with errors - {shown}{more}{_aggregate_suffix(failed, ok_count, total)}."
+    return f"{total} device(s): no interface errors on {ok_count} OK device(s){_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_health(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    connected = ports = vlans = 0
+    versions: set[str] = set()
+    for result in results:
+        data = result.parsed_data if result.success and isinstance(result.parsed_data, dict) else {}
+        interfaces = data.get("interfaces") if isinstance(data.get("interfaces"), list) else []
+        vlan_rows = data.get("vlans") if isinstance(data.get("vlans"), list) else []
+        version = data.get("version") if isinstance(data.get("version"), dict) else {}
+        ports += len(interfaces)
+        connected += sum(1 for row in interfaces if "connected" in str(row.get("status", "")).lower())
+        vlans += len(vlan_rows)
+        if version.get("software"):
+            versions.add(str(version["software"]))
+    version_text = f", {len(versions)} IOS version(s)" if versions else ""
+    return f"{total} device(s): {ok_count} healthy response(s), {connected}/{ports} ports up, {vlans} VLAN rows{version_text}{_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_device_facts(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    connected = ports = err_disabled = 0
+    versions: set[str] = set()
+    for result in results:
+        data = result.parsed_data if result.success and isinstance(result.parsed_data, dict) else {}
+        ports += int(data.get("total_ports") or 0)
+        connected += int(data.get("connected_ports") or 0)
+        err_disabled += int(data.get("err_disabled_ports") or 0)
+        if data.get("ios_version"):
+            versions.add(str(data["ios_version"]))
+    err_text = f", {err_disabled} err-disabled" if err_disabled else ""
+    return f"{total} device(s): {connected}/{ports} ports up{err_text}, {len(versions)} IOS version(s){_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_versions(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    versions: dict[str, int] = {}
+    for result in results:
+        data = result.parsed_data if result.success and isinstance(result.parsed_data, dict) else {}
+        software = str(data.get("software") or "unknown")
+        versions[software] = versions.get(software, 0) + 1
+    if versions:
+        top_version, top_count = max(versions.items(), key=lambda item: item[1])
+        top_version = top_version[:60]
+        return f"{total} device(s): {ok_count} OK, most common version on {top_count} device(s): {top_version}{_aggregate_suffix(failed, ok_count, total)}."
+    return f"{total} device(s): {ok_count} OK{_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _aggregate_trunks(
+    results: list[OpenClawResult],
+    failed: list[OpenClawResult],
+    ok_count: int,
+    total: int,
+) -> str:
+    active = 0
+    for result in results:
+        summary = result.summary or ""
+        match = re.search(r":\s+(\d+)\s+active trunk", summary, flags=re.IGNORECASE)
+        if match:
+            active += int(match.group(1))
+    return f"{total} device(s): {active} active trunk(s) across {ok_count} OK device(s){_aggregate_suffix(failed, ok_count, total)}."
+
+
+def _is_telegram_mode(response_mode: str | None) -> bool:
+    return str(response_mode or "").lower() == "telegram"
+
+
+def _safe_response(response: OpenClawResponse, response_mode: str | None) -> dict:
+    """Return a redacted API or Telegram response."""
+
+    if _is_telegram_mode(response_mode):
+        return redact_data(_telegram_response(response))
+    return redact_data(response.model_dump())
+
+
+def _telegram_response(response: OpenClawResponse) -> dict:
+    """Build the final-only response shape intended for Telegram/OpenClaw chat."""
+
+    return {
+        "success": response.success,
+        "status": response.status,
+        "intent": response.intent,
+        "scope": response.scope,
+        "aggregate_summary": response.aggregate_summary,
+        "results": [
+            {
+                "summary": result.summary,
+            }
+            for result in response.results
+        ],
+        "error": response.error,
+        "request_id": response.request_id,
+        "audit_path": response.audit_path,
+    }
+
+
+def _job_result_from_dict(data: dict[str, Any]) -> JobResult:
+    """Rehydrate runner execution output for existing summary/filter logic."""
+
+    return JobResult(
+        success=bool(data.get("success")),
+        device=str(data.get("device") or data.get("adapter") or "netpulse"),
+        intent=str(data.get("intent") or "unknown"),
+        command_executed=str(data.get("command_executed") or data.get("summary") or ""),
+        parsed_data=data.get("parsed_data"),
+        raw_output=str(data.get("raw_output") or data.get("summary") or ""),
+        error=data.get("error"),
+        elapsed_ms=data.get("elapsed_ms"),
+    )
+
+
 def _err(intent: str, scope: str, error: str) -> dict:
     """Build a failed OpenClawResponse dict for pre-execution errors."""
-    return OpenClawResponse(
+    return _safe_response(OpenClawResponse(
         success=False,
         intent=intent,
         scope=scope,
         results=[],
         error=error,
-    ).model_dump()
+    ), response_mode=None)
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────────
@@ -469,10 +694,10 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  ./scripts/run_openclaw_netpulse.sh "
+            "'{\"intent\": \"show_vlans\", \"device\": \"sw-core-01\"}'\n"
             "  python3 -m app.openclaw_adapter "
-            "--json '{\"intent\": \"show_vlans\", \"device\": \"sw-core-01\"}'\n"
-            "  echo '{\"intent\": \"health_check\", \"scope\": \"all\"}' "
-            "| python3 -m app.openclaw_adapter\n"
+            "--json '{\"intent\": \"show_vlans\", \"device\": \"sw-core-01\"}'  # developer-only\n"
         ),
     )
     parser.add_argument("--json", metavar="PAYLOAD", help="JSON payload string")

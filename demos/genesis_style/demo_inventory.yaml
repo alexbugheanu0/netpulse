@@ -1,0 +1,18 @@
+network:
+  paths:
+    - name: lab-net/demo-001
+      status: reachable
+compute:
+  nodes:
+    - sim-node-01
+    - sim-node-02
+    - sim-node-03
+storage:
+  paths:
+    - /mnt/demo
+  datasets:
+    - demo-dataset
+instrument:
+  devices:
+    - name: mock-sensor-01
+      status: idle

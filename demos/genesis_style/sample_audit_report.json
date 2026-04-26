@@ -1,0 +1,76 @@
+{
+  "request_id": "np-demo-001",
+  "timestamp": "2026-04-26T00:00:00+00:00",
+  "user": "demo-user",
+  "source": "genesis-style-demo",
+  "original_request": "Prepare the lab environment for simulation job demo-001.",
+  "normalized_intent": "prepare_lab_environment",
+  "domain": "lab",
+  "devices": [
+    "demo network path",
+    "simulation cluster",
+    "demo dataset path",
+    "mock lab instrument"
+  ],
+  "targets": [
+    "demo network path",
+    "simulation cluster",
+    "demo dataset path",
+    "mock lab instrument"
+  ],
+  "risk_decision": {
+    "risk": "LOW_CHANGE",
+    "approval_required": false,
+    "allowed": true,
+    "reason": "Low-risk fixed intent; approval is required for real infrastructure writes."
+  },
+  "approval_required": false,
+  "approval_received": false,
+  "prechecks": [
+    {
+      "name": "risk_classification",
+      "status": "ok"
+    }
+  ],
+  "execution_results": [
+    {
+      "adapter": "cisco_ios",
+      "intent": "check_network_path",
+      "success": true,
+      "summary": "Mock network path is reachable for simulation job demo-001."
+    },
+    {
+      "adapter": "compute_mock",
+      "intent": "check_compute_health",
+      "success": true,
+      "summary": "3/3 simulation nodes healthy."
+    },
+    {
+      "adapter": "storage_mock",
+      "intent": "check_storage_path",
+      "success": true,
+      "summary": "Storage path /mnt/demo is reachable."
+    },
+    {
+      "adapter": "instrument_mock",
+      "intent": "check_instrument_status",
+      "success": true,
+      "summary": "Mock instrument is online and idle."
+    }
+  ],
+  "postchecks": [
+    {
+      "verified": true,
+      "checks": [
+        "mock_network",
+        "mock_compute",
+        "mock_storage",
+        "mock_instrument"
+      ],
+      "error": null
+    }
+  ],
+  "final_status": "success",
+  "errors": [],
+  "duration_ms": 1.0
+}

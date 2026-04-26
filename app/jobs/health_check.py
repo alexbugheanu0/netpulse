@@ -11,6 +11,7 @@ from app.logger import get_logger
 from app.models import Device, JobResult
 from app.parsers import parse_show_interfaces, parse_show_version, parse_show_vlans
 from app.ssh_client import run_command, run_commands
+from app.jobs._job_cache import get_job_result, store_job_result
 
 logger = get_logger(__name__)
 
@@ -35,12 +36,41 @@ def run(device: Device) -> JobResult:
     Each command is attempted independently — partial failures are captured
     in the error field. The job succeeds only if all commands complete cleanly.
     """
+    cache_key = ("health_check", device.name)
+    cached = get_job_result(cache_key)
+    if cached is not None:
+        return cached
+
+    collected, errors = collect_with_fallback(device)
+
+    success = len(errors) == 0
+    summary_lines = [f"Health check — {device.name}"]
+    for key, val in collected.items():
+        preview = str(val)[:120]
+        summary_lines.append(f"  [{key}] {preview}")
+    if errors:
+        summary_lines.append(f"  [errors] {'; '.join(errors)}")
+
+    result = JobResult(
+        success=success,
+        device=device.name,
+        intent="health_check",
+        command_executed=", ".join(HEALTH_COMMANDS.values()),
+        parsed_data=collected,
+        raw_output="\n".join(summary_lines),
+        error="; ".join(errors) if errors else None,
+    )
+    if result.success:
+        store_job_result(cache_key, result)
+    return result
+
+
+def collect_with_fallback(device: Device) -> tuple[dict, list[str]]:
+    """Collect health-check command outputs, falling back to per-command SSH."""
+
     collected: dict = {}
     errors: list[str] = []
 
-    # Attempt all commands in a single SSH session to avoid paying the TCP
-    # handshake + login cost once per command.  Fall back to individual calls
-    # if the batch session itself fails so partial results are still returned.
     try:
         outputs = run_commands(device, list(HEALTH_COMMANDS.values()))
         for key, command in HEALTH_COMMANDS.items():
@@ -64,21 +94,4 @@ def run(device: Device) -> JobResult:
                 logger.warning(f"Health [{key}] FAILED on {device.name}: {exc}")
                 errors.append(f"{key}: {exc}")
 
-    success = len(errors) == 0
-
-    summary_lines = [f"Health check — {device.name}"]
-    for key, val in collected.items():
-        preview = str(val)[:120]
-        summary_lines.append(f"  [{key}] {preview}")
-    if errors:
-        summary_lines.append(f"  [errors] {'; '.join(errors)}")
-
-    return JobResult(
-        success=success,
-        device=device.name,
-        intent="health_check",
-        command_executed=", ".join(HEALTH_COMMANDS.values()),
-        parsed_data=collected,
-        raw_output="\n".join(summary_lines),
-        error="; ".join(errors) if errors else None,
-    )
+    return collected, errors

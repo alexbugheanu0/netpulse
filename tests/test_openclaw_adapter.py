@@ -1,6 +1,7 @@
 """Unit tests for the OpenClaw adapter and summarizer."""
 
 import json
+import os
 import re
 from unittest.mock import patch
 
@@ -614,6 +615,98 @@ def test_aggregate_summary_reports_failure_device():
     assert "1 failed" in agg
 
 
+def test_aggregate_summary_health_check_rolls_up_bulk_counts():
+    r1 = HEALTH_RESULT
+    r2 = HEALTH_RESULT.model_copy(update={"device": "sw-dist-01"})
+    p1, p2, p3 = _patch_all(results=[r1, r2])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "health_check", "scope": "all"})
+
+    agg = resp["aggregate_summary"]
+    assert agg is not None
+    assert "2 device" in agg
+    assert "ports up" in agg
+    assert "VLAN" in agg
+
+
+def test_telegram_response_mode_omits_bulky_plan_metadata():
+    r1 = VLAN_RESULT
+    r2 = VLAN_RESULT.model_copy(update={"device": "sw-dist-01"})
+    p1, p2, p3 = _patch_all(results=[r1, r2])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_vlans",
+            "scope": "all",
+            "response_mode": "telegram",
+        })
+
+    assert resp["success"] is True
+    assert "aggregate_summary" in resp
+    assert "audit_path" in resp
+    assert "request_id" in resp
+    assert "plan" not in resp
+    assert "risk_decision" not in resp
+    assert set(resp["results"][0].keys()) == {"summary"}
+
+
+def test_telegram_response_mode_excludes_raw_command_output():
+    secret_raw = "NETPULSE_PASSWORD=super-secret-value\nshow vlan brief output"
+    result = VLAN_RESULT.model_copy(update={"raw_output": secret_raw})
+    p1, p2, p3 = _patch_all(results=[result])
+    with p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_vlans",
+            "device": "sw-core-01",
+            "response_mode": "telegram",
+        })
+
+    serialised = json.dumps(resp)
+    assert "command_executed" not in serialised
+    assert "raw_output" not in serialised
+    assert "show vlan brief output" not in serialised
+    assert "super-secret-value" not in serialised
+
+
+def test_response_redacts_env_secret_values():
+    secret = "device-password-123"
+    failed = JobResult(
+        success=False,
+        device="sw-core-01",
+        intent="show_vlans",
+        command_executed="show vlan brief",
+        error=f"Authentication failed with password={secret}",
+    )
+    p1, p2, p3 = _patch_all(results=[failed])
+    with patch.dict(os.environ, {"NETPULSE_PASSWORD": secret}), p1, p2, p3:
+        resp = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
+
+    serialised = json.dumps(resp)
+    assert secret not in serialised
+    assert "[REDACTED]" in serialised
+
+
+def test_telegram_response_redacts_secret_patterns():
+    secret = "enable-secret-456"
+    failed = JobResult(
+        success=False,
+        device="sw-core-01",
+        intent="show_vlans",
+        command_executed="show vlan brief",
+        error=f"NETPULSE_SECRET={secret}",
+    )
+    p1, p2, p3 = _patch_all(results=[failed])
+    with patch.dict(os.environ, {"NETPULSE_SECRET": secret}), p1, p2, p3:
+        resp = run_openclaw({
+            "intent": "show_vlans",
+            "device": "sw-core-01",
+            "response_mode": "telegram",
+        })
+
+    serialised = json.dumps(resp)
+    assert secret not in serialised
+    assert "NETPULSE_SECRET=[REDACTED]" in serialised
+
+
 # ── OpenClawRequest schema ─────────────────────────────────────────────────────
 
 def test_openclaw_request_accepts_query_and_verbose():
@@ -621,15 +714,18 @@ def test_openclaw_request_accepts_query_and_verbose():
     req = OpenClawRequest(intent="show_arp", device="sw-core-01")
     assert req.query is None
     assert req.verbose is False
+    assert req.response_mode == "full"
 
     req2 = OpenClawRequest(
         intent="show_arp",
         device="sw-core-01",
         query="10.0.0.5",
         verbose=True,
+        response_mode="telegram",
     )
     assert req2.query == "10.0.0.5"
     assert req2.verbose is True
+    assert req2.response_mode == "telegram"
 
 
 def test_openclaw_response_includes_aggregate_summary_field():

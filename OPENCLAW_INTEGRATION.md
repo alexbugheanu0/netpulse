@@ -4,16 +4,16 @@
 connects to Telegram, WhatsApp, Discord, Signal, and iMessage, and extends the LLM agent with
 a **Skills** plugin system.
 
-NetPulse integrates with OpenClaw as a **native skill**. The skill file (`skills/netpulse/SKILL.md`)
+NetPulse integrates with OpenClaw as the **NetPulse OpenClaw skill**. The skill file (`skills/netpulse/SKILL.md`)
 teaches the LLM agent when to call NetPulse and how to build valid JSON payloads. OpenClaw invokes
-NetPulse via its built-in `exec` tool — the agent runs a shell command and gets back clean JSON.
+NetPulse via its built-in `exec` tool using this repository's wrapper script — the agent runs a shell command and gets back clean JSON.
 
 No API server, no custom webhook, no database. The agent reads SKILL.md and calls the adapter as a
 subprocess.
 
 ---
 
-## How it works
+## How It Works
 
 ```
 User message (Telegram / WhatsApp / Discord)
@@ -25,21 +25,25 @@ OpenClaw LLM agent
          ▼
 exec tool
   cd /path/to/netpulse-project
-  python3 -m app.openclaw_adapter --json '{"intent":"...","device":"...","scope":"..."}'
+  ./scripts/run_openclaw_netpulse.sh '{"intent":"...","device":"...","scope":"..."}'
          │
          ▼
 app/openclaw_adapter.py
-  (schema validation → allowlist → inventory lookup → executor)
+  (schema validation → allowlist → runner)
          │
          ▼
-SSH to Cisco device
+NetPulse lifecycle
+  request → intent → execution plan → risk classification
+  → approval gate → adapter execution → verification → audit artifact
          │
          ▼
 JSON response → summary → chat reply
 ```
 
-All execution is read-only. The adapter enforces an explicit intent allowlist and never lets any
-string from OpenClaw reach the device SSH session directly.
+The adapter enforces an explicit intent allowlist and never lets any string from OpenClaw reach the
+device SSH session directly. Read-only intents run without approval. Write intents require explicit
+approval and are still checked against SSOT/protected-resource policy before execution. Unknown
+intents and arbitrary CLI remain blocked.
 
 ---
 
@@ -100,11 +104,11 @@ You should see `netpulse` in the list. If not, restart OpenClaw after copying th
 
 ### 5. Update the device path in the skill
 
-Open `skills/netpulse/SKILL.md` and confirm the `cd` path in the "How to call NetPulse"
-section matches your actual project location:
+Open `skills/netpulse/SKILL.md` and confirm the wrapper path in the "How to call NetPulse"
+section matches this repository:
 
 ```
-cd /home/alex/netpulse-project && source .venv/bin/activate && ...
+/home/alex/netpulse-project/scripts/run_openclaw_netpulse.sh 'PAYLOAD'
 ```
 
 ---
@@ -124,13 +128,13 @@ pytest tests/ -v
 source .venv/bin/activate
 
 # Unknown device — should return JSON error
-python3 -m app.openclaw_adapter --json '{"intent":"show_vlans","device":"sw-nonexistent","scope":"single"}'
+./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-nonexistent","scope":"single"}'
 
-# Disallowed intent — should return JSON error
-python3 -m app.openclaw_adapter --json '{"intent":"ping","device":"sw-core-01","scope":"single"}'
+# Missing ping target — should return JSON error
+./scripts/run_openclaw_netpulse.sh '{"intent":"ping","device":"sw-core-01","scope":"single"}'
 
 # Schema error (missing intent) — should return JSON error
-python3 -m app.openclaw_adapter --json '{"device":"sw-core-01"}'
+./scripts/run_openclaw_netpulse.sh '{"device":"sw-core-01"}'
 ```
 
 ### Test via the wrapper script
@@ -151,7 +155,7 @@ OpenClaw should load the netpulse skill, build the correct payload, run the adap
 reply with a VLAN summary.
 
 > **Exec approval note:** The first time OpenClaw uses the `exec` tool you may see a prompt asking
-> you to approve execution of shell commands by this skill. Grant approval for the netpulse skill
+> you to approve execution of shell commands by the netpulse skill. Grant approval for the netpulse skill
 > to allow it to call the adapter.
 
 ---
@@ -201,13 +205,31 @@ reply with a VLAN summary.
 
 ```json
 {
-  "intent":    "<intent name>",
-  "device":    "<device name from inventory/devices.yaml>",
-  "scope":     "single | all | role",
-  "role":      "<role name — required when scope=role>",
-  "raw_query": "<original user message — optional, for logging>"
+  "intent": "<intent name>",
+  "device": "<device name from inventory/devices.yaml>",
+  "scope": "single | all | role",
+  "role": "<role name — required when scope=role>",
+  "raw_query": "<original user message — optional, for audit>",
+  "dry_run": false,
+  "approval_received": false,
+  "request_id": "<optional caller-provided id>",
+  "user": "<optional user/chat identity>",
+  "source": "openclaw",
+  "response_mode": "full | telegram",
+  "query": "<optional server-side filter>",
+  "verbose": false,
+  "ping_target": "<required for ping>",
+  "vlan_id": 0,
+  "vlan_name": "",
+  "interface": ""
 }
 ```
+
+Set `dry_run: true` to generate a plan and audit artifact without execution. Set
+`approval_received: true` only after the user explicitly confirms a write or high-risk action.
+Use `response_mode: "telegram"` for Telegram/chat replies; it keeps the returned JSON compact while
+preserving the full plan and audit artifacts on disk. Keep `verbose: false` for normal chat use and
+use `query` for large ARP, MAC, route, interface, error, CDP, or logging lookups.
 
 ### Scope rules
 
@@ -217,14 +239,33 @@ reply with a VLAN summary.
 | `all` | omit | — | All SSH-enabled devices in inventory |
 | `role` | omit | required | All SSH-enabled devices with that role |
 
+For chat prompts that name a role, prefer `scope=role` over `scope=all`. Reserve `scope=all` for
+explicit network-wide requests.
+
 ### Response schema
+
+Default `response_mode: "full"` includes plan and risk metadata for API clients.
+`response_mode: "telegram"` omits bulky plan/risk objects and returns the chat-facing
+summary fields plus `request_id` and `audit_path`.
 
 ```json
 {
   "success": true,
-  "intent":  "show_vlans",
-  "scope":   "single",
-  "error":   null,
+  "status": "success",
+  "request_id": "np-...",
+  "intent": "show_vlans",
+  "scope": "single",
+  "approval_required": false,
+  "plan": { "...": "structured execution plan" },
+  "risk_decision": {
+    "risk": "READ_ONLY",
+    "approval_required": false,
+    "allowed": true,
+    "reason": "Read-only intent; no configuration change requested."
+  },
+  "plan_path": "output/plans/np-....json",
+  "audit_path": "output/audit/YYYY-MM-DD/np-....json",
+  "error": null,
   "results": [
     {
       "device":      "sw-core-01",
@@ -513,7 +554,7 @@ reply with a VLAN summary.
 
 ---
 
-### Error — intent not permitted
+### Error — missing required field
 
 **Request:**
 ```json
@@ -526,7 +567,7 @@ reply with a VLAN summary.
   "success": false,
   "intent":  "ping",
   "scope":   "single",
-  "error":   "'ping' is not permitted via OpenClaw. Allowed: audit_trunks, audit_vlans, backup_config, device_facts, drift_check, health_check, show_interfaces, show_trunks, show_vlans, show_version.",
+  "error":   "A target IP is required for ping. Use --target <ip> or include it in the query: 'ping 10.0.0.1 from sw-core-01'.",
   "results": []
 }
 ```
@@ -590,7 +631,7 @@ The payload sent to the adapter is not valid JSON.
 
 ```bash
 # Test with a known-good payload first
-python3 -m app.openclaw_adapter --json '{"intent":"show_vlans","device":"sw-core-01","scope":"single"}'
+./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-core-01","scope":"single"}'
 ```
 
 Common causes: unescaped double-quotes inside a string, trailing comma after
@@ -634,12 +675,22 @@ If `NETPULSE_USERNAME` or `NETPULSE_PASSWORD` are empty, SSH connections will fa
 immediately on the first login attempt.
 
 ```bash
-# Check variables are loaded
+# Check variables are present without printing secret values
 source .venv/bin/activate
-python3 -c "from app.config import SSH_USERNAME, SSH_PASSWORD; print(repr(SSH_USERNAME), repr(SSH_PASSWORD))"
+python3 - <<'PY'
+from app.config import SSH_USERNAME, SSH_PASSWORD, SSH_SECRET
+
+print("NETPULSE_USERNAME:", "set" if SSH_USERNAME else "missing")
+print("NETPULSE_PASSWORD:", "set" if SSH_PASSWORD else "missing")
+print("NETPULSE_SECRET:", "set" if SSH_SECRET else "missing/unused")
+PY
 ```
 
-If they print as empty strings, check:
+Never print, paste, or send `.env` contents, OpenClaw secrets, SSH passwords, or
+enable secrets in Telegram or chat. If any credential value appears in chat,
+rotate it before continuing.
+
+If a required value is missing, check:
 1. `.env` file exists at the project root (copy from `.env.example`).
 2. Variable names match exactly: `NETPULSE_USERNAME`, `NETPULSE_PASSWORD`.
 3. No extra spaces around the `=` sign in the `.env` file.

@@ -238,19 +238,18 @@ python3 -m app.main --intent drift_check   --scope all
 
 ---
 
-## Part 3 — Use the JSON adapter (OpenClaw / scripting)
+## Part 3 — Use the NetPulse OpenClaw wrapper
 
-The adapter accepts a JSON payload and returns a JSON response. No Rich formatting.
+The repository wrapper accepts a JSON payload and returns a JSON response. It is
+the preferred OpenClaw entry point because it always runs this repository's
+NetPulse adapter from the correct project root and virtual environment.
 
 ```bash
 # Single device
-python3 -m app.openclaw_adapter --json '{"intent":"show_vlans","device":"sw-core-01","scope":"single"}'
+./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-core-01","scope":"single","response_mode":"telegram"}'
 
 # All devices
-python3 -m app.openclaw_adapter --json '{"intent":"health_check","scope":"all"}'
-
-# Via the shell wrapper (handles venv automatically)
-./scripts/run_openclaw_netpulse.sh '{"intent":"show_route","device":"sw-core-01","scope":"single"}'
+./scripts/run_openclaw_netpulse.sh '{"intent":"health_check","scope":"all","response_mode":"telegram"}'
 
 # Via stdin
 echo '{"intent":"show_logging","device":"sw-core-01","scope":"single"}' | ./scripts/run_openclaw_netpulse.sh
