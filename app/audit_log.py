@@ -36,6 +36,7 @@ def start_audit(plan: ExecutionPlan, risk_decision: RiskDecision) -> dict[str, A
         "prechecks": [],
         "execution_results": [],
         "postchecks": [],
+        "verification": None,
         "final_status": "started",
         "errors": [],
         "duration_ms": None,
@@ -62,7 +63,9 @@ def record_execution(audit: dict[str, Any], result: Any) -> None:
 def record_postcheck(audit: dict[str, Any], result: Any) -> None:
     """Append a post-change verification result."""
 
-    audit.setdefault("postchecks", []).append(_jsonable(result))
+    jsonable_result = _jsonable(result)
+    audit.setdefault("postchecks", []).append(jsonable_result)
+    audit["verification"] = jsonable_result
 
 
 def finish_audit(

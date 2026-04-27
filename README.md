@@ -58,13 +58,56 @@ Plans are written under `output/plans/`. Audit reports are written under `output
 
 ## Genesis-Style Demo
 
-Run the mock multi-domain demo without real Cisco devices:
+Run the mock multi-domain demo without real Cisco devices. It simulates:
+"Prepare the lab environment for simulation job demo-001."
 
 ```bash
-python demos/genesis_style/run_demo.py
+python3 demos/genesis_style/run_demo.py
+python3 demos/genesis_style/run_demo.py --dry-run
+python3 demos/genesis_style/run_demo.py --simulate-write
+python3 demos/genesis_style/run_demo.py --simulate-write --approve
 ```
 
-It simulates: "Prepare the lab environment for simulation job demo-001."
+- `python3 demos/genesis_style/run_demo.py` runs normal readiness checks only. Risk is `READ_ONLY`; no real infrastructure changes are executed.
+- `python3 demos/genesis_style/run_demo.py --dry-run` generates the plan and audit artifact without executing mock adapters.
+- `python3 demos/genesis_style/run_demo.py --simulate-write` shows the approval gate for a simulated infrastructure-modifying workflow. No adapters execute.
+- `python3 demos/genesis_style/run_demo.py --simulate-write --approve` simulates approved execution with mock adapters, verification, and audit.
+
+Sample output excerpt:
+
+```text
+2. Execution plan generated
+   - check_network_path -> demo network path (cisco_ios)
+   - check_compute_health -> simulation cluster (compute_mock)
+   - check_storage_path -> demo dataset path (storage_mock)
+   - check_instrument_status -> mock lab instrument (instrument_mock)
+   - verify_environment -> simulation job demo-001 (mock_verifier)
+Structured plan preview
+{
+  "request_id": "np-...",
+  "intent": "prepare_lab_environment",
+  "risk": "READ_ONLY",
+  "approval_required": false,
+  "steps": [
+    "check_network_path",
+    "check_compute_health",
+    "check_storage_path",
+    "check_instrument_status",
+    "verify_environment"
+  ]
+}
+3. Risk classification
+   READ_ONLY: Demo readiness checks only; no real infrastructure changes executed.
+6. JSON audit artifact path
+   output/audit/YYYY-MM-DD/np-....json
+Audit summary:
+- Request ID: np-...
+- Final status: success
+- Approval required: false
+- Approval received: false
+- Verification: passed
+- Duration: 1.2 ms
+```
 
 ## Current Limitations
 

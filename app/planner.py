@@ -77,6 +77,44 @@ MOCK_DEMO_INTENTS: dict[str, list[dict[str, str]]] = {
             "expected_result": "All mocked readiness checks passed.",
         },
     ],
+    "prepare_experiment_environment": [
+        {
+            "action": "check_network_path",
+            "target": "demo network path",
+            "adapter": "cisco_ios",
+            "expected_result": "Network path is reachable for the simulation job.",
+        },
+        {
+            "action": "check_compute_health",
+            "target": "simulation cluster",
+            "adapter": "compute_mock",
+            "expected_result": "Compute nodes are healthy.",
+        },
+        {
+            "action": "allocate_simulation_nodes",
+            "target": "simulation cluster",
+            "adapter": "compute_mock",
+            "expected_result": "Simulation nodes are allocated.",
+        },
+        {
+            "action": "check_storage_path",
+            "target": "demo dataset path",
+            "adapter": "storage_mock",
+            "expected_result": "Dataset and mount path are ready.",
+        },
+        {
+            "action": "prepare_instrument_mock",
+            "target": "mock lab instrument",
+            "adapter": "instrument_mock",
+            "expected_result": "Instrument is prepared for the simulation.",
+        },
+        {
+            "action": "verify_environment",
+            "target": "simulation job demo-001",
+            "adapter": "mock_verifier",
+            "expected_result": "All mocked readiness and preparation checks passed.",
+        },
+    ],
 }
 
 

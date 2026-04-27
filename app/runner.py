@@ -159,7 +159,7 @@ def _execute_plan(
     params: dict[str, Any],
     risk_decision: RiskDecision,
 ) -> list[Any]:
-    if intent == "prepare_lab_environment":
+    if intent in {"prepare_lab_environment", "prepare_experiment_environment"}:
         return _execute_genesis_demo(plan, params)
 
     if plan.domain == "network":
@@ -189,7 +189,7 @@ def _verify_if_needed(
     params: dict[str, Any],
     execution_results: list[Any],
 ) -> dict[str, Any] | None:
-    if intent == "prepare_lab_environment":
+    if intent in {"prepare_lab_environment", "prepare_experiment_environment"}:
         success = _all_success(execution_results)
         return {
             "verified": success,
@@ -228,11 +228,17 @@ def _execute_genesis_demo(plan: ExecutionPlan, params: dict[str, Any]) -> list[d
                 "parsed_data": {"path": "lab-net/demo-001", "reachable": True},
             }
         elif step.adapter == "compute_mock":
-            result = compute.execute_read(step.action, params)
+            if step.action == "allocate_simulation_nodes":
+                result = compute.execute_write(step.action, params)
+            else:
+                result = compute.execute_read(step.action, params)
         elif step.adapter == "storage_mock":
             result = storage.execute_read(step.action, params)
         elif step.adapter == "instrument_mock":
-            result = instrument.execute_read(step.action, params)
+            if step.action == "prepare_instrument_mock":
+                result = instrument.execute_write(step.action, params)
+            else:
+                result = instrument.execute_read(step.action, params)
         else:
             result = {
                 "success": True,

@@ -64,12 +64,13 @@ READ_ONLY_INTENTS: frozenset[str] = frozenset({
     "check_dataset_available",
     "verify_mount_ready",
     "check_instrument_status",
+    "prepare_lab_environment",
 })
 
 LOW_CHANGE_INTENTS: frozenset[str] = frozenset({
     "add_vlan",
     "prepare_instrument_mock",
-    "prepare_lab_environment",
+    "prepare_experiment_environment",
 })
 
 MEDIUM_CHANGE_INTENTS: frozenset[str] = frozenset({
@@ -102,6 +103,13 @@ def classify_intent(
     intent_name = _normalise_intent(intent)
 
     if intent_name in READ_ONLY_INTENTS:
+        if intent_name == "prepare_lab_environment":
+            return RiskDecision(
+                risk=RiskLevel.READ_ONLY,
+                approval_required=False,
+                allowed=True,
+                reason="Demo readiness checks only; no real infrastructure changes executed.",
+            )
         return RiskDecision(
             risk=RiskLevel.READ_ONLY,
             approval_required=False,
@@ -149,15 +157,8 @@ def _normalise_intent(intent: str) -> str:
     return str(intent).strip().lower().replace(" ", "_")
 
 
-def _looks_read_only(intent: str) -> bool:
-    return intent.startswith(("show_", "check_", "get_", "read_", "verify_"))
-
-
 def _requires_approval(intent: str) -> bool:
-    # The Genesis demo is a deterministic readiness workflow with no external
-    # side effects. Every actual read/write adapter intent still follows the
-    # normal approval default for writes.
-    return intent != "prepare_lab_environment"
+    return intent in WRITE_INTENTS
 
 
 def _protected_resource_decision(
