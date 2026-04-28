@@ -222,7 +222,11 @@ while $ADD_MORE; do
 done
 
 S_DEVICES=$DEVICES_ADDED
-[ "$DEVICES_ADDED" -gt 0 ] && ok "$DEVICES_ADDED device(s) configured" || info "No new devices added"
+if [ "$DEVICES_ADDED" -gt 0 ]; then
+    ok "$DEVICES_ADDED device(s) configured"
+else
+    info "No new devices added"
+fi
 
 # ── Step 5 — Verify connectivity ─────────────────────────────────────────────
 
@@ -231,7 +235,7 @@ step "Step 5 — Connectivity check"
 if [ "$DEVICES_ADDED" -gt 0 ]; then
     info "Running TCP port-22 reachability test for new devices..."
     # Collect the names of devices just added (last N entries in inventory)
-    ADDED_NAMES=$(grep "name:" inventory/devices.yaml | tail -"$DEVICES_ADDED" | awk '{print $NF}')
+    ADDED_NAMES=$(grep "name:" inventory/devices.yaml | tail -n "$DEVICES_ADDED" | awk '{print $NF}')
     for DEV in $ADDED_NAMES; do
         if .venv/bin/python3 -m app.main --intent show_version --device "$DEV" --check 2>/dev/null; then
             ok "Reachable: $DEV"
@@ -319,9 +323,11 @@ _status() { $1 && echo -e "${GREEN}[OK]${RESET}  $2" || echo -e "${RED}[!!]${RES
 _status $S_VENV     "Python virtual environment"
 _status $S_DEPS     "Python dependencies"
 _status $S_ENV      "SSH credentials (.env)"
-[ "$S_DEVICES" -gt 0 ] \
-    && echo -e "${GREEN}[OK]${RESET}  $S_DEVICES device(s) configured" \
-    || echo -e "${YELLOW}[--]${RESET}  No devices added (run: bash scripts/add-device.sh)"
+if [ "$S_DEVICES" -gt 0 ]; then
+    echo -e "${GREEN}[OK]${RESET}  $S_DEVICES device(s) configured"
+else
+    echo -e "${YELLOW}[--]${RESET}  No devices added (run: bash scripts/add-device.sh)"
+fi
 _status $S_TESTS    "Test suite"
 _status $S_OPENCLAW "OpenClaw integration"
 

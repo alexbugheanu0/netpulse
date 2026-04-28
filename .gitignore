@@ -1,6 +1,7 @@
 git-connection.local.txt
 .env
 .venv/
+.tools/
 __pycache__/
 *.pyc
 *.pyo

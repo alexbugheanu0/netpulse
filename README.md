@@ -135,12 +135,18 @@ Credentials live in `.env` only, never in `inventory/` or git. The app never sen
 ### Option A — Automated (recommended on Ubuntu / Debian)
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/alexbugheanu0/netpulse/main/scripts/bootstrap.sh | bash
+```
+
+The bootstrap script clones NetPulse into `~/netpulse-project` and starts the setup wizard. If you already cloned the repo, run the wizard directly:
+
+```bash
 git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
 cd netpulse-project
 bash scripts/setup.sh
 ```
 
-The script installs dependencies, creates the venv, helps you set SSH credentials, and can add devices. Later, add or remove devices with:
+The setup wizard installs dependencies, creates the venv, helps you set SSH credentials, and can add devices. Later, add or remove devices with:
 
 ```bash
 bash scripts/add-device.sh
