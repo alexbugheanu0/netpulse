@@ -211,9 +211,10 @@ reply with a VLAN summary.
   "role": "<role name — required when scope=role>",
   "raw_query": "<original user message — optional, for audit>",
   "dry_run": false,
-  "approval_received": false,
+  "approval_response": "<yes|no — only on follow-up approval calls>",
   "request_id": "<optional caller-provided id>",
   "user": "<optional user/chat identity>",
+  "approved_by": "<user who confirmed the pending request>",
   "source": "openclaw",
   "response_mode": "full | telegram",
   "query": "<optional server-side filter>",
@@ -226,7 +227,9 @@ reply with a VLAN summary.
 ```
 
 Set `dry_run: true` to generate a plan and audit artifact without execution. Set
-`approval_received: true` only after the user explicitly confirms a write or high-risk action.
+`approval_response: "yes"` only on a second call that references the `request_id`
+returned by the pending approval response. Do not use `approval_received`; it is
+kept for compatibility but cannot unlock write execution.
 Use `response_mode: "telegram"` for Telegram/chat replies; it keeps the returned JSON compact while
 preserving the full plan and audit artifacts on disk. Keep `verbose: false` for normal chat use and
 use `query` for large ARP, MAC, route, interface, error, CDP, or logging lookups.
@@ -256,6 +259,7 @@ summary fields plus `request_id` and `audit_path`.
   "intent": "show_vlans",
   "scope": "single",
   "approval_required": false,
+  "approval": null,
   "plan": { "...": "structured execution plan" },
   "risk_decision": {
     "risk": "READ_ONLY",
@@ -280,6 +284,44 @@ summary fields plus `request_id` and `audit_path`.
 ```
 
 **Present `results[].summary` in chat** — it is already formatted for human reading.
+
+### Write approval flow
+
+Write intents are two-step. The first call plans and records a pending approval
+without executing device changes:
+
+```json
+{
+  "intent": "add_vlan",
+  "device": "sw-core-01",
+  "scope": "single",
+  "vlan_id": 50,
+  "vlan_name": "SERVERS2",
+  "user": "alice"
+}
+```
+
+The response includes `status: "approval_required"`, a `request_id`, an
+`approval.expires_at` timestamp, and an audit path. After the user confirms in
+chat, call the same intent and parameters with the original `request_id`:
+
+```json
+{
+  "intent": "add_vlan",
+  "device": "sw-core-01",
+  "scope": "single",
+  "vlan_id": 50,
+  "vlan_name": "SERVERS2",
+  "request_id": "np-...",
+  "user": "alice",
+  "approved_by": "alice",
+  "approval_response": "yes"
+}
+```
+
+NetPulse validates the pending record, expiry, requester, and parameter hash
+before minting a signed receipt internally. A mismatched, expired, already-used,
+or bare `approval_received: true` request does not execute.
 
 ---
 
@@ -775,7 +817,6 @@ These are marked as TODO comments in the source code.
 
 | TODO tag | Location | What it enables |
 |---|---|---|
-| `TODO (approval workflow)` | `openclaw_adapter.py` | Confirmation prompt before `backup_config` (or future write actions) |
 | `TODO (SNMP enrichment)` | `openclaw_adapter.py`, `models.py`, `inventory.py` | Pre-flight SNMP reachability and counter data |
 | `TODO (diff mode)` | `openclaw_adapter.py`, `parsers.py` | Add `diff_backup` to allowlist for post-change audits |
 | `TODO (Ansible execution path)` | `openclaw_adapter.py` | Route approved write intents to Ansible instead of SSH |

@@ -707,6 +707,101 @@ def test_telegram_response_redacts_secret_patterns():
     assert "NETPULSE_SECRET=[REDACTED]" in serialised
 
 
+# ── Approval workflow ─────────────────────────────────────────────────────────
+
+def test_openclaw_write_requires_pending_approval(monkeypatch, tmp_path):
+    import app.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+    p1, p2, p3 = _patch_all()
+    with p1, p2, p3 as execute_mock:
+        resp = run_openclaw({
+            "intent": "add_vlan",
+            "device": "sw-core-01",
+            "scope": "single",
+            "vlan_id": 250,
+            "vlan_name": "TEST",
+            "user": "alice",
+        })
+
+    assert resp["success"] is False
+    assert resp["status"] == "approval_required"
+    assert resp["approval"]["request_id"] == resp["request_id"]
+    execute_mock.assert_not_called()
+
+
+def test_openclaw_legacy_approval_received_cannot_bypass(monkeypatch, tmp_path):
+    import app.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+    p1, p2, p3 = _patch_all()
+    with p1, p2, p3 as execute_mock:
+        resp = run_openclaw({
+            "intent": "add_vlan",
+            "device": "sw-core-01",
+            "scope": "single",
+            "vlan_id": 250,
+            "vlan_name": "TEST",
+            "approval_received": True,
+            "user": "alice",
+        })
+
+    assert resp["success"] is False
+    assert resp["status"] == "approval_required"
+    execute_mock.assert_not_called()
+
+
+def test_openclaw_confirmed_approval_executes(monkeypatch, tmp_path):
+    import app.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+    p1, p2, p3 = _patch_all(results=[
+        JobResult(
+            success=True,
+            device="sw-core-01",
+            intent="add_vlan",
+            command_executed="vlan 250 / name TEST",
+            parsed_data={"vlan_id": 250, "vlan_name": "TEST"},
+        )
+    ])
+    payload = {
+        "intent": "add_vlan",
+        "device": "sw-core-01",
+        "scope": "single",
+        "vlan_id": 250,
+        "vlan_name": "TEST",
+        "user": "alice",
+    }
+
+    with p1, p2, p3:
+        pending = run_openclaw(payload)
+    monkeypatch.setattr(
+        "app.runner.CiscoIOSAdapter.verify",
+        lambda self, intent, params, execution_results: {"verified": True, "checks": ["mock"], "error": None},
+    )
+    p1, p2, p3 = _patch_all(results=[
+        JobResult(
+            success=True,
+            device="sw-core-01",
+            intent="add_vlan",
+            command_executed="vlan 250 / name TEST",
+            parsed_data={"vlan_id": 250, "vlan_name": "TEST"},
+        )
+    ])
+    with p1, p2, p3:
+        approved = run_openclaw(payload | {
+            "request_id": pending["request_id"],
+            "approval_response": "yes",
+        })
+
+    assert approved["success"] is True
+    assert approved["status"] == "success"
+    assert approved["approval"]["approved_by"] == "alice"
+
+
 # ── OpenClawRequest schema ─────────────────────────────────────────────────────
 
 def test_openclaw_request_accepts_query_and_verbose():

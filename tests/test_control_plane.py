@@ -13,6 +13,7 @@ from demos.genesis_style.run_demo import audit_summary, build_plan_preview, run_
 
 def _patch_artifact_paths(monkeypatch, tmp_path: Path) -> None:
     from app import audit_log as audit_mod
+    from app import approval as approval_mod
     from app import planner as planner_mod
     from app import runner as runner_mod
 
@@ -26,6 +27,8 @@ def _patch_artifact_paths(monkeypatch, tmp_path: Path) -> None:
         "save_audit",
         lambda audit: audit_mod.save_audit(audit, tmp_path / "audit"),
     )
+    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
 
 
 def test_planner_creates_valid_plan():
@@ -178,6 +181,201 @@ def test_runner_requires_approval_before_write_execution(monkeypatch, tmp_path):
     assert result["status"] == "approval_required"
     assert result["approval_required"] is True
     assert result["execution_results"] == []
+    assert result["approval"]["request_id"] == result["request_id"]
+
+
+def test_runner_rejects_legacy_approval_received_without_receipt(monkeypatch, tmp_path):
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
+
+    result = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params={"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"},
+        approval_received=True,
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "approval_required"
+    assert result["execution_results"] == []
+
+
+def test_runner_rejects_mismatched_approval_receipt(monkeypatch, tmp_path):
+    from app.approval import approve_pending_request
+
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
+    base_params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
+
+    pending = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=base_params,
+        user="alice",
+        source="test",
+    )
+    receipt = approve_pending_request(
+        request_id=pending["request_id"],
+        approved_by="alice",
+        intent="add_vlan",
+        params=base_params,
+    )
+
+    changed_params = base_params | {"request_id": pending["request_id"], "vlan_id": 251}
+    result = run_request(
+        original_request="add vlan 251",
+        normalized_intent="add_vlan",
+        params=changed_params,
+        user="alice",
+        source="test",
+        approval_receipt=receipt,
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "approval_required"
+    assert "parameters" in result["error"].lower()
+    assert result["execution_results"] == []
+
+
+def test_runner_rejects_expired_approval(monkeypatch, tmp_path):
+    from datetime import timedelta
+
+    from app import approval as approval_mod
+
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
+    params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
+
+    pending = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=params,
+        user="alice",
+        source="test",
+    )
+    future = approval_mod._now() + timedelta(minutes=20)
+    monkeypatch.setattr(approval_mod, "_now", lambda: future)
+
+    try:
+        approval_mod.approve_pending_request(
+            request_id=pending["request_id"],
+            approved_by="alice",
+            intent="add_vlan",
+            params=params,
+        )
+    except approval_mod.ApprovalError as exc:
+        assert "expired" in str(exc).lower()
+    else:
+        raise AssertionError("Expired approval was accepted")
+
+
+def test_runner_rejects_expired_approval_receipt(monkeypatch, tmp_path):
+    from datetime import timedelta
+    import json
+
+    from app import approval as approval_mod
+
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
+    params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
+
+    pending = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=params,
+        user="alice",
+        source="test",
+    )
+    receipt = approval_mod.approve_pending_request(
+        request_id=pending["request_id"],
+        approved_by="alice",
+        intent="add_vlan",
+        params=params,
+    )
+    record_path = approval_mod.APPROVAL_STATE_DIR / f"{pending['request_id']}.json"
+    record = json.loads(record_path.read_text())
+    record["expires_at"] = (approval_mod._now() - timedelta(seconds=1)).isoformat()
+    record_path.write_text(json.dumps(record))
+
+    result = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=params | {"request_id": pending["request_id"]},
+        user="alice",
+        source="test",
+        approval_receipt=receipt,
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "approval_required"
+    assert "expired" in result["error"].lower()
+    assert result["execution_results"] == []
+
+
+def test_runner_executes_with_signed_approval_receipt(monkeypatch, tmp_path):
+    from app.approval import approve_pending_request
+
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    inventory = {
+        "sw-a-01": Device(
+            name="sw-a-01",
+            hostname="sw-a-01",
+            ip="192.0.2.20",
+            platform="cisco_ios",
+            role="access",
+            ssh_enabled=True,
+        )
+    }
+    job_result = JobResult(
+        success=True,
+        device="sw-a-01",
+        intent="add_vlan",
+        command_executed="vlan 250 / name TEST",
+        parsed_data={"vlan_id": 250, "vlan_name": "TEST"},
+    )
+    params = {
+        "device": "sw-a-01",
+        "scope": "single",
+        "vlan_id": 250,
+        "vlan_name": "TEST",
+        "_inventory_loader": lambda: inventory,
+        "_validate_request": lambda req, inv: None,
+        "_executor_execute": lambda req, inv: [job_result],
+    }
+
+    pending = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=params,
+        user="alice",
+        source="test",
+    )
+    receipt = approve_pending_request(
+        request_id=pending["request_id"],
+        approved_by="alice",
+        intent="add_vlan",
+        params=params,
+    )
+    monkeypatch.setattr(
+        "app.runner.CiscoIOSAdapter.verify",
+        lambda self, intent, params, execution_results: {"verified": True, "checks": ["mock"], "error": None},
+    )
+
+    approved = run_request(
+        original_request="add vlan 250",
+        normalized_intent="add_vlan",
+        params=params | {"request_id": pending["request_id"]},
+        user="alice",
+        source="test",
+        approval_receipt=receipt,
+    )
+
+    audit = json.loads(Path(approved["audit_path"]).read_text())
+    assert approved["success"] is True
+    assert approved["status"] == "success"
+    assert approved["execution_results"][0]["intent"] == "add_vlan"
+    assert approved["approval"]["approved_by"] == "alice"
+    assert audit["approval_received"] is True
 
 
 def test_genesis_demo_intent_completes_successfully(monkeypatch, tmp_path):

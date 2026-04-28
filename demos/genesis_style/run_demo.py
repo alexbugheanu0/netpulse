@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.approval import approve_pending_request  # noqa: E402
 from app.runner import run_request  # noqa: E402
 
 
@@ -55,20 +56,45 @@ def run_demo(dry_run: bool = False, simulate_write: bool = False, approve: bool 
 
     request = "Prepare the lab environment for simulation job demo-001."
     intent = "prepare_experiment_environment" if simulate_write else "prepare_lab_environment"
+    params = {
+        "domain": "lab",
+        "job_id": "demo-001",
+        "dataset": "demo-dataset",
+        "storage_path": "/mnt/demo",
+        "node_count": 2,
+    }
+
+    if simulate_write and approve and not dry_run:
+        pending = run_request(
+            original_request=request,
+            normalized_intent=intent,
+            params=params,
+            user="demo-user",
+            source="genesis-style-demo",
+        )
+        receipt = approve_pending_request(
+            request_id=pending["request_id"],
+            approved_by="demo-user",
+            intent=intent,
+            params=params,
+        )
+        approved_params = params | {"request_id": pending["request_id"]}
+        return run_request(
+            original_request=request,
+            normalized_intent=intent,
+            params=approved_params,
+            user="demo-user",
+            source="genesis-style-demo",
+            approval_receipt=receipt,
+        )
+
     return run_request(
         original_request=request,
         normalized_intent=intent,
-        params={
-            "domain": "lab",
-            "job_id": "demo-001",
-            "dataset": "demo-dataset",
-            "storage_path": "/mnt/demo",
-            "node_count": 2,
-        },
+        params=params,
         user="demo-user",
         source="genesis-style-demo",
         dry_run=dry_run,
-        approval_received=approve,
     )
 
 

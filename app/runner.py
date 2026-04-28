@@ -9,6 +9,12 @@ from app.adapters.cisco_ios import CiscoIOSAdapter, build_intent_request, is_wri
 from app.adapters.compute_mock import ComputeMockAdapter
 from app.adapters.instrument_mock import InstrumentMockAdapter
 from app.adapters.storage_mock import StorageMockAdapter
+from app.approval import (
+    ApprovalError,
+    consume_approval_receipt,
+    create_pending_approval,
+    validate_approval_receipt,
+)
 from app.audit_log import (
     finish_audit,
     record_execution,
@@ -31,6 +37,7 @@ def run_request(
     source: str | None = None,
     dry_run: bool = False,
     approval_received: bool = False,
+    approval_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the full NetPulse lifecycle and return JSON-compatible output."""
 
@@ -43,6 +50,8 @@ def run_request(
     audit = start_audit(plan, risk_decision)
     audit_path: Path | None = None
     plan_path: Path | None = None
+    approval_metadata: dict[str, Any] | None = None
+    receipt_consumed = False
 
     try:
         plan_path = save_plan(plan)
@@ -67,7 +76,49 @@ def run_request(
                 error=risk_decision.reason,
             )
 
-        if risk_decision.approval_required and not approval_received:
+        if risk_decision.approval_required:
+            try:
+                approval_metadata = validate_approval_receipt(
+                    approval_receipt,
+                    plan,
+                    run_params,
+                )
+                record_precheck(audit, "approval_receipt", approval_metadata)
+            except ApprovalError as exc:
+                if approval_receipt is None:
+                    approval = create_pending_approval(plan, risk_decision, run_params)
+                else:
+                    approval = {
+                        "request_id": plan.request_id,
+                        "status": "invalid",
+                        "intent": plan.normalized_intent,
+                    }
+                record_precheck(
+                    audit,
+                    "approval_pending",
+                    approval | {"error": str(exc)},
+                    status="approval_required",
+                )
+                final = finish_audit(audit, "approval_required", approval_received=False)
+                audit_path = save_audit(final)
+                return _response(
+                    success=False,
+                    status="approval_required",
+                    plan=plan,
+                    risk_decision=risk_decision,
+                    plan_path=plan_path,
+                    audit_path=audit_path,
+                    execution_results=[],
+                    verification=None,
+                    error=str(exc),
+                    approval=approval,
+                )
+
+        # Deprecated compatibility flag is audit-only. It cannot unlock writes
+        # without a server-issued approval receipt.
+        effective_approval_received = approval_metadata is not None
+
+        if risk_decision.approval_required and not effective_approval_received:
             final = finish_audit(audit, "approval_required", approval_received=False)
             audit_path = save_audit(final)
             return _response(
@@ -81,7 +132,7 @@ def run_request(
             )
 
         if dry_run:
-            final = finish_audit(audit, "dry_run", approval_received=approval_received)
+            final = finish_audit(audit, "dry_run", approval_received=effective_approval_received)
             audit_path = save_audit(final)
             plan.final_status = "dry_run"
             return _response(
@@ -96,6 +147,9 @@ def run_request(
             )
 
         execution_results = _execute_plan(plan, normalized_intent, run_params, risk_decision)
+        if approval_metadata is not None:
+            consume_approval_receipt(approval_receipt)
+            receipt_consumed = True
         for result in execution_results:
             record_execution(audit, result)
 
@@ -113,7 +167,12 @@ def run_request(
         errors = _collect_errors(execution_results)
         if verification and verification.get("error"):
             errors.append(str(verification["error"]))
-        final = finish_audit(audit, status, errors=errors, approval_received=approval_received)
+        final = finish_audit(
+            audit,
+            status,
+            errors=errors,
+            approval_received=effective_approval_received,
+        )
         audit_path = save_audit(final)
         return _response(
             success=success,
@@ -125,9 +184,12 @@ def run_request(
             execution_results=execution_results,
             verification=verification,
             error=None if success else "; ".join(errors) or "Execution failed.",
+            approval=approval_metadata,
         )
 
     except Exception as exc:
+        if approval_metadata is not None and not receipt_consumed:
+            consume_approval_receipt(approval_receipt)
         error_message = (
             f"Inventory file not found: {exc}."
             if isinstance(exc, FileNotFoundError)
@@ -139,7 +201,7 @@ def run_request(
             audit,
             "failed",
             errors=[error_message],
-            approval_received=approval_received,
+            approval_received=approval_metadata is not None,
         )
         audit_path = save_audit(final)
         return _response(
@@ -311,6 +373,7 @@ def _response(
     execution_results: list[Any] | None = None,
     verification: dict[str, Any] | None = None,
     error: str | None = None,
+    approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "success": success,
@@ -325,6 +388,7 @@ def _response(
         "audit_path": str(audit_path) if audit_path else None,
         "execution_results": _jsonable(execution_results or []),
         "verification": _jsonable(verification),
+        "approval": _jsonable(approval),
         "error": error,
     }
 

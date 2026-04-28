@@ -28,7 +28,7 @@ The current production adapter wraps existing Cisco IOS jobs in `app/jobs/`. Dem
 - Every request maps to a fixed intent and validated parameters.
 - Every request gets an execution plan before execution.
 - Read-only intents run without approval.
-- Write and high-risk intents require approval unless they are demo-only mocks.
+- Write and high-risk intents require a server-side pending approval and signed receipt before execution.
 - Existing SSOT and protected-resource policy remains enforced.
 - Write actions get post-change verification where supported.
 - Every lifecycle path writes a JSON audit artifact.
@@ -218,7 +218,7 @@ These YAML files describe **what you expect** on the network and **what changes 
 | `change-policy.yaml` | When the agent may auto-approve vs must ask vs must refuse |
 | `protected-resources.yaml` | VLANs, devices, and interfaces that are always sensitive |
 
-The agent (and validators for write intents) use these for governance before `add_vlan`, `remove_vlan`, or interface changes. Edit the files under `ssot/` to match your environment; see inline comments there for structure.
+The agent (and validators for write intents) use these for governance before `add_vlan`, `remove_vlan`, or interface changes. Write execution is two-step: the first request returns `approval_required` and saves a pending approval, then the confirmation request must reference the same `request_id` and matching parameters before NetPulse mints a signed receipt. Edit the files under `ssot/` to match your environment; see inline comments there for structure.
 
 ---
 
@@ -263,7 +263,7 @@ python3 -m app.main --intent show_errors --role access
 pytest tests/ -v
 ```
 
-There are **250** unit tests (no live switches required): intents, parsers, inventory, validation, audits, OpenClaw adapter, and SSH helpers. Run `pytest tests/ --collect-only -q` to confirm the current count.
+There are **288** unit tests (no live switches required): intents, parsers, inventory, validation, audits, OpenClaw adapter, approval workflow, and SSH helpers. Run `pytest tests/ --collect-only -q` to confirm the current count.
 
 ---
 

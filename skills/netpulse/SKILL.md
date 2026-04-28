@@ -128,9 +128,10 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
   "role":        "<role name — required when scope=role>",
   "ping_target": "<IPv4 — required when intent=ping>",
   "dry_run": false,
-  "approval_received": false,
+  "approval_response": "<yes|no — only on follow-up approval calls>",
   "request_id": "<optional id from caller>",
   "user": "<optional user/chat identity>",
+  "approved_by": "<user who confirmed the pending request>",
   "source": "openclaw",
   "response_mode": "telegram",
   "query":       "<optional server-side filter>",
@@ -261,11 +262,15 @@ Decision:
    > Confirm? Reply **yes** to execute or **no** to cancel.
 
 3. Wait for the user's reply in Telegram.
-4. Call the adapter only if the reply is `yes` / `y` / `confirm` or equivalent.
+4. Call the adapter only if the reply is `yes` / `y` / `confirm` or equivalent,
+   using the same intent/parameters plus the original `request_id`,
+   `approved_by`, and `approval_response: "yes"`.
 5. If negative — abort and confirm cancellation.
 
 Do NOT execute write intents silently. Do NOT assume confirmation from the
-original request. See REFERENCE.md examples 11–15 for the full payload shapes.
+original request. Do NOT rely on `approval_received: true`; write execution
+requires the server-side pending approval and signed receipt flow. See
+REFERENCE.md examples 11–15 for the full payload shapes.
 
 ---
 

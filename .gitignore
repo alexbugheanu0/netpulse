@@ -11,4 +11,6 @@ output/reports/*.json
 output/audit/
 output/plans/
 output/*_errors.json
+state/approvals/
+state/approval_secret
 .openclaw/

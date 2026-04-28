@@ -29,9 +29,9 @@ Request → Response flow:
 TODO (OpenClaw integration): Map OpenClaw tool call arguments directly to
 OpenClawRequest fields. The function run_openclaw(payload) is the tool handler.
 
-TODO (approval workflow for write actions): Before executing backup_config (or
-any future write intent), insert an approval checkpoint here. OpenClaw presents
-the proposed action in chat; only call executor.execute() after "confirm".
+Approval workflow: write intents first return status=approval_required and a
+server-side pending approval. OpenClaw must send a follow-up confirmation with
+the same request_id; NetPulse then mints a signed approval receipt internally.
 
 TODO (Telegram/OpenClaw channel integration): Route channel messages through
 OpenClaw's intent classifier, then call this adapter with the classified intent.
@@ -56,6 +56,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, ValidationError
 
 from app import executor
+from app.approval import ApprovalError, approve_pending_request
 from app.inventory import load_inventory
 from app.logger import get_logger
 from app.models import IntentType, JobResult, ScopeType
@@ -148,7 +149,10 @@ class OpenClawRequest(BaseModel):
     verbose: bool = False          # when True, return full parsed_data (no truncation)
     response_mode: str = "full"    # "full" for APIs, "telegram" for compact chat replies
     dry_run: bool = False
-    approval_received: bool = False
+    approval_received: bool = False  # deprecated; cannot unlock writes by itself
+    approval_response: Optional[str] = None  # e.g. "yes" on a follow-up approval call
+    approval_receipt: Optional[dict[str, Any]] = None  # server-issued receipt for internal callers
+    approved_by: Optional[str] = None
     request_id: Optional[str] = None
     user: Optional[str] = None
     source: Optional[str] = "openclaw"
@@ -201,6 +205,7 @@ class OpenClawResponse(BaseModel):
     plan:               Optional[dict[str, Any]] = None
     risk_decision:      Optional[dict[str, Any]] = None
     approval_required:  bool = False
+    approval:           Optional[dict[str, Any]] = None
     plan_path:          Optional[str] = None
     audit_path:         Optional[str] = None
 
@@ -295,29 +300,51 @@ def run_openclaw(payload: dict) -> dict:
         logger.warning(f"Disallowed intent blocked: {oc_req.intent!r}")
         return _err(oc_req.intent, oc_req.scope, msg)
 
+    runner_params = {
+        "request_id": oc_req.request_id,
+        "device": oc_req.device,
+        "scope": oc_req.scope,
+        "role": oc_req.role,
+        "raw_query": oc_req.raw_query,
+        "query": oc_req.query,
+        "vlan_id": oc_req.vlan_id,
+        "vlan_name": oc_req.vlan_name,
+        "interface": oc_req.interface,
+        "ping_target": oc_req.ping_target,
+        "_inventory_loader": load_inventory,
+        "_validate_request": validate_request,
+        "_executor_execute": executor.execute,
+    }
+
+    approval_receipt = oc_req.approval_receipt
+    if oc_req.approval_response is not None:
+        if not _is_positive_approval(oc_req.approval_response):
+            return _err(oc_req.intent, oc_req.scope, "Approval was not confirmed; execution cancelled.")
+        if not oc_req.request_id:
+            return _err(oc_req.intent, oc_req.scope, "An approval request_id is required to confirm execution.")
+        approved_by = oc_req.approved_by or oc_req.user
+        if not approved_by:
+            return _err(oc_req.intent, oc_req.scope, "approved_by or user is required to confirm execution.")
+        try:
+            approval_receipt = approve_pending_request(
+                request_id=oc_req.request_id,
+                approved_by=approved_by,
+                intent=oc_req.intent,
+                params=runner_params,
+            )
+        except ApprovalError as exc:
+            return _err(oc_req.intent, oc_req.scope, str(exc))
+
     # ── Step 4: run the safe lifecycle ─────────────────────────────────────────
     runner_result = run_request(
         original_request=oc_req.raw_query or f"openclaw:{oc_req.intent}",
         normalized_intent=oc_req.intent,
-        params={
-            "request_id": oc_req.request_id,
-            "device": oc_req.device,
-            "scope": oc_req.scope,
-            "role": oc_req.role,
-            "raw_query": oc_req.raw_query,
-            "query": oc_req.query,
-            "vlan_id": oc_req.vlan_id,
-            "vlan_name": oc_req.vlan_name,
-            "interface": oc_req.interface,
-            "ping_target": oc_req.ping_target,
-            "_inventory_loader": load_inventory,
-            "_validate_request": validate_request,
-            "_executor_execute": executor.execute,
-        },
+        params=runner_params,
         user=oc_req.user,
         source=oc_req.source or "openclaw",
         dry_run=oc_req.dry_run,
         approval_received=oc_req.approval_received,
+        approval_receipt=approval_receipt,
     )
 
     results = [_job_result_from_dict(item) for item in runner_result.get("execution_results", [])]
@@ -341,6 +368,7 @@ def run_openclaw(payload: dict) -> dict:
             plan=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("plan"),
             risk_decision=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("risk_decision"),
             approval_required=bool(runner_result.get("approval_required")),
+            approval=runner_result.get("approval"),
             plan_path=runner_result.get("plan_path"),
             audit_path=runner_result.get("audit_path"),
         )
@@ -397,6 +425,7 @@ def run_openclaw(payload: dict) -> dict:
         plan=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("plan"),
         risk_decision=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("risk_decision"),
         approval_required=bool(runner_result.get("approval_required")),
+        approval=runner_result.get("approval"),
         plan_path=runner_result.get("plan_path"),
         audit_path=runner_result.get("audit_path"),
         error=None if results else runner_result.get("error"),
@@ -621,6 +650,10 @@ def _is_telegram_mode(response_mode: str | None) -> bool:
     return str(response_mode or "").lower() == "telegram"
 
 
+def _is_positive_approval(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"yes", "y", "confirm", "approved", "approve"}
+
+
 def _safe_response(response: OpenClawResponse, response_mode: str | None) -> dict:
     """Return a redacted API or Telegram response."""
 
@@ -646,6 +679,7 @@ def _telegram_response(response: OpenClawResponse) -> dict:
         ],
         "error": response.error,
         "request_id": response.request_id,
+        "approval": response.approval,
         "audit_path": response.audit_path,
     }
 
