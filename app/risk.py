@@ -54,6 +54,7 @@ READ_ONLY_INTENTS: frozenset[str] = frozenset({
     "show_etherchannel",
     "show_port_security",
     "show_logging",
+    "diagnose_endpoint",
     "audit_vlans",
     "audit_trunks",
     "device_facts",

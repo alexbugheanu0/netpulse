@@ -9,6 +9,7 @@ an operator-friendly message.
 from __future__ import annotations
 
 import ipaddress
+import re
 
 from app.logger import get_logger
 from app.models import Device, IntentRequest, IntentType, ScopeType
@@ -30,6 +31,15 @@ WRITE_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.NO_SHUTDOWN_INTERFACE,
     IntentType.SET_INTERFACE_VLAN,
 })
+
+MAC_RE = re.compile(
+    r"^(?:"
+    r"(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|"
+    r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|"
+    r"(?:[0-9a-f]{2}-){5}[0-9a-f]{2}"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 def validate_request(
@@ -107,6 +117,17 @@ def validate_request(
             raise ValueError(
                 f"'{req.ping_target}' is a broadcast or multicast address. "
                 "Only unicast addresses are permitted as a ping target."
+            )
+
+    if req.intent == IntentType.DIAGNOSE_ENDPOINT:
+        if not req.endpoint:
+            raise ValueError(
+                "Intent 'diagnose_endpoint' requires an endpoint IP or MAC address."
+            )
+        if not _valid_endpoint(req.endpoint):
+            raise ValueError(
+                f"'{req.endpoint}' is not a valid endpoint. "
+                "Use an IPv4 address or MAC address."
             )
 
     if req.scope == ScopeType.SINGLE:
@@ -232,3 +253,15 @@ def policy_check(req: IntentRequest) -> None:
                         f"is a protected resource. Reason: {reason}. "
                         "This operation is forbidden by ssot/protected-resources.yaml."
                     )
+
+
+def _valid_endpoint(value: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return bool(MAC_RE.match(value.strip()))
+    return not (
+        addr.is_multicast
+        or addr.is_unspecified
+        or (isinstance(addr, ipaddress.IPv4Address) and int(addr) == 0xFFFFFFFF)
+    )

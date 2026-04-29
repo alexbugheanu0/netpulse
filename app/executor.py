@@ -36,6 +36,7 @@ from app.jobs import (
     audit_vlans,
     backup_config,
     device_facts,
+    diagnose_endpoint,
     diff_backup,
     drift_check,
     health_check,
@@ -81,6 +82,7 @@ JOB_MAP: dict[IntentType, Callable] = {
     IntentType.SHOW_ETHERCHANNEL:  show_etherchannel.run,
     IntentType.SHOW_PORT_SECURITY: show_port_security.run,
     IntentType.SHOW_LOGGING:       show_logging.run,
+    IntentType.DIAGNOSE_ENDPOINT:  diagnose_endpoint.run,
     # SSOT audit intents
     IntentType.AUDIT_VLANS:        audit_vlans.run,
     IntentType.AUDIT_TRUNKS:       audit_trunks.run,
@@ -130,6 +132,8 @@ def execute(req: IntentRequest, inventory: dict) -> list[JobResult]:
     # Special cases: intents that inject extra parameters at call time
     if req.intent == IntentType.PING:
         job_fn: Callable = lambda device: ping.run(device, req.ping_target)
+    elif req.intent == IntentType.DIAGNOSE_ENDPOINT:
+        job_fn = lambda device: diagnose_endpoint.run(device, req.endpoint)
     elif req.intent == IntentType.ADD_VLAN:
         job_fn = lambda device: add_vlan.run(device, req.vlan_id, req.vlan_name)
     elif req.intent == IntentType.REMOVE_VLAN:

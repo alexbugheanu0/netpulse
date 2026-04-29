@@ -118,6 +118,9 @@ def summarize(result: JobResult) -> str:
     if intent == "show_logging":
         return _logging_summary(device, data)
 
+    if intent == "diagnose_endpoint":
+        return _diagnose_endpoint_summary(device, data)
+
     if intent == "ping":
         return result.raw_output or f"{device}: ping result unavailable."
 
@@ -229,6 +232,22 @@ def _backup_summary(device: str, data) -> str:
     if filename:
         return f"{device}: Config saved — {filename}."
     return f"{device}: Config backup complete."
+
+
+def _diagnose_endpoint_summary(device: str, data) -> str:
+    """One-line endpoint diagnosis summary."""
+    if not isinstance(data, dict):
+        return f"{device}: Endpoint diagnosis completed."
+
+    endpoint = data.get("endpoint", "endpoint")
+    port = data.get("access_port") or "unknown port"
+    vlan = data.get("vlan") or "unknown VLAN"
+    cause = data.get("likely_cause") or "No obvious fault found."
+    confidence = data.get("confidence") or "unknown"
+    return (
+        f"{device}: {endpoint} -> {port} / VLAN {vlan}; "
+        f"{cause} Confidence: {confidence}."
+    )
 
 
 def _device_facts_summary(device: str, data) -> str:

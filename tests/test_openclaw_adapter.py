@@ -141,6 +141,7 @@ def test_allowlist_contains_required_intents():
         IntentType.SHOW_ETHERCHANNEL,
         IntentType.SHOW_PORT_SECURITY,
         IntentType.SHOW_LOGGING,
+        IntentType.DIAGNOSE_ENDPOINT,
     }
     assert required <= OPENCLAW_ALLOWED_INTENTS
 
@@ -229,6 +230,41 @@ def test_valid_all_scope_request():
     assert resp["success"] is True
     assert resp["scope"]   == "all"
     assert len(resp["results"]) == 1
+
+
+def test_diagnose_endpoint_accepts_endpoint_field():
+    diagnosis = JobResult(
+        success=True,
+        device="sw-core-01",
+        intent="diagnose_endpoint",
+        command_executed="fixed diagnosis",
+        parsed_data={
+            "endpoint": "10.0.0.25",
+            "access_port": "Gi0/3",
+            "vlan": "20",
+            "likely_cause": "No obvious fault found.",
+            "confidence": "medium",
+        },
+    )
+    captured = {}
+
+    def _validate(req, inv):
+        captured["endpoint"] = req.endpoint
+
+    with (
+        patch("app.openclaw_adapter.load_inventory", return_value=MOCK_INVENTORY),
+        patch("app.openclaw_adapter.validate_request", side_effect=_validate),
+        patch("app.openclaw_adapter.executor.execute", return_value=[diagnosis]),
+    ):
+        resp = run_openclaw({
+            "intent": "diagnose_endpoint",
+            "device": "sw-core-01",
+            "endpoint": "10.0.0.25",
+        })
+
+    assert resp["success"] is True
+    assert captured["endpoint"] == "10.0.0.25"
+    assert "No obvious fault" in resp["results"][0]["summary"]
 
 
 def test_response_envelope_keys_present():

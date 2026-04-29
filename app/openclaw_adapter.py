@@ -93,6 +93,7 @@ OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.SHOW_ETHERCHANNEL,
     IntentType.SHOW_PORT_SECURITY,
     IntentType.SHOW_LOGGING,
+    IntentType.DIAGNOSE_ENDPOINT,
     # Backup and health
     IntentType.BACKUP_CONFIG,
     IntentType.DIFF_BACKUP,
@@ -161,6 +162,7 @@ class OpenClawRequest(BaseModel):
     vlan_name: Optional[str] = None   # add_vlan
     interface: Optional[str] = None   # shutdown_interface, no_shutdown_interface, set_interface_vlan
     ping_target: Optional[str] = None  # ping
+    endpoint: Optional[str] = None     # diagnose_endpoint IP or MAC
 
 
 class OpenClawResult(BaseModel):
@@ -267,7 +269,11 @@ def run_openclaw(payload: dict) -> dict:
 
     # `query` is only meaningful on filterable intents; log a gentle note so
     # the agent can learn when it is wasting a field, but do not error out.
-    if oc_req.query and oc_req.intent not in FILTERABLE_INTENTS:
+    if (
+        oc_req.query
+        and oc_req.intent not in FILTERABLE_INTENTS
+        and oc_req.intent != IntentType.DIAGNOSE_ENDPOINT.value
+    ):
         logger.info(
             f"query={oc_req.query!r} ignored — intent {oc_req.intent!r} is not filterable"
         )
@@ -311,6 +317,7 @@ def run_openclaw(payload: dict) -> dict:
         "vlan_name": oc_req.vlan_name,
         "interface": oc_req.interface,
         "ping_target": oc_req.ping_target,
+        "endpoint": oc_req.endpoint or oc_req.query,
         "_inventory_loader": load_inventory,
         "_validate_request": validate_request,
         "_executor_execute": executor.execute,

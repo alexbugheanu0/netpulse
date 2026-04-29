@@ -35,6 +35,7 @@ class IntentType(str, Enum):
     SHOW_ETHERCHANNEL  = "show_etherchannel" # show etherchannel summary — LAG/LACP
     SHOW_PORT_SECURITY = "show_port_security"# show port-security — violations/state
     SHOW_LOGGING       = "show_logging"      # show logging — recent syslog entries
+    DIAGNOSE_ENDPOINT  = "diagnose_endpoint" # correlate ARP/MAC/port evidence for one endpoint
     # SSOT audit intents
     AUDIT_VLANS        = "audit_vlans"       # compare VLANs vs ssot/vlans.yaml
     AUDIT_TRUNKS       = "audit_trunks"      # compare trunks vs ssot/trunks.yaml
@@ -82,6 +83,7 @@ class IntentRequest(BaseModel):
     vlan_id:     Optional[int] = None     # for add_vlan, remove_vlan, set_interface_vlan
     vlan_name:   Optional[str] = None     # for add_vlan
     interface:   Optional[str] = None     # for shutdown_interface, no_shutdown_interface, set_interface_vlan
+    endpoint:    Optional[str] = None     # IP or MAC for diagnose_endpoint
 
 
 class JobResult(BaseModel):

@@ -145,6 +145,46 @@ def test_ping_missing_target_raises():
         validate_request(req, INVENTORY)
 
 
+def test_diagnose_endpoint_valid_ip():
+    req = IntentRequest(
+        intent=IntentType.DIAGNOSE_ENDPOINT,
+        device="sw-core-01",
+        scope=ScopeType.SINGLE,
+        endpoint="10.0.0.25",
+        raw_query="test",
+    )
+    validate_request(req, INVENTORY)
+
+
+def test_diagnose_endpoint_valid_mac():
+    req = IntentRequest(
+        intent=IntentType.DIAGNOSE_ENDPOINT,
+        device="sw-core-01",
+        scope=ScopeType.SINGLE,
+        endpoint="aabb.cc00.0101",
+        raw_query="test",
+    )
+    validate_request(req, INVENTORY)
+
+
+def test_diagnose_endpoint_missing_endpoint_raises():
+    req = _req(IntentType.DIAGNOSE_ENDPOINT, device="sw-core-01")
+    with pytest.raises(ValueError, match="requires an endpoint"):
+        validate_request(req, INVENTORY)
+
+
+def test_diagnose_endpoint_invalid_endpoint_raises():
+    req = IntentRequest(
+        intent=IntentType.DIAGNOSE_ENDPOINT,
+        device="sw-core-01",
+        scope=ScopeType.SINGLE,
+        endpoint="not-an-endpoint",
+        raw_query="test",
+    )
+    with pytest.raises(ValueError, match="not a valid endpoint"):
+        validate_request(req, INVENTORY)
+
+
 # ── policy_check() ─────────────────────────────────────────────────────────────
 # All tests use a minimal ProtectedResources fixture injected via mock so they
 # do not depend on the live ssot/ YAML files on disk.

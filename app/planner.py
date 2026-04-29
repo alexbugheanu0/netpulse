@@ -30,6 +30,10 @@ READ_COMMAND_PREVIEW: dict[str, str] = {
     "show_etherchannel": "show etherchannel summary",
     "show_port_security": "show port-security",
     "show_logging": "show logging",
+    "diagnose_endpoint": (
+        "show ip arp + show mac address-table + show interfaces status + "
+        "show interfaces + show port-security + show spanning-tree"
+    ),
     "audit_vlans": "show vlan brief -> compare against SSOT",
     "audit_trunks": "show interfaces trunk -> compare against SSOT",
     "device_facts": "show version + show interfaces status",
@@ -188,6 +192,11 @@ def _target_from_params(params: dict[str, Any]) -> str:
 def _command_preview(intent: str, params: dict[str, Any]) -> str | None:
     if intent == "ping" and params.get("ping_target"):
         return f"ping {params['ping_target']} repeat 5"
+    if intent == "diagnose_endpoint":
+        return (
+            "fixed endpoint diagnosis for "
+            f"{params.get('endpoint') or params.get('query') or params.get('target')}"
+        )
     if intent == "add_vlan":
         return f"vlan {params.get('vlan_id')} / name {params.get('vlan_name')}"
     if intent == "remove_vlan":
@@ -213,6 +222,8 @@ def _expected_result(intent: str, target: str) -> str:
         return "Local backup diff result."
     if intent == "ping":
         return f"Ping reachability result from {target}."
+    if intent == "diagnose_endpoint":
+        return f"Endpoint diagnosis with correlated evidence from {target}."
     return f"Intent {intent} completed and verified for {target}."
 
 

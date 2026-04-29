@@ -60,6 +60,10 @@ INTENT_PATTERNS: list[tuple[IntentType, list[str]]] = [
                                      r"\brecent[\s_-]?events?\b", r"\blast[\s_-]?reload\b",
                                      r"\brecent[\s_-]?errors?\b", r"\bwhat\s+happened\b",
                                      r"\blog[\s_-]?messages?\b"]),
+    (IntentType.DIAGNOSE_ENDPOINT,  [r"\bdiagnos(?:e|is|tic)\b", r"\btroubleshoot\b",
+                                     r"\bendpoint\b", r"\bhost\b",
+                                     r"\bwhy\s+(?:can'?t|cannot|won'?t)\b",
+                                     r"\bnot\s+(?:reachable|working|passing\s+traffic)\b"]),
     (IntentType.SHOW_TRUNKS,        [r"\btrunk\b"]),
     (IntentType.SHOW_VLANS,         [r"\bvlans?\b"]),
     (IntentType.SHOW_INTERFACES,    [r"\binterfaces?\b"]),
@@ -69,8 +73,19 @@ INTENT_PATTERNS: list[tuple[IntentType, list[str]]] = [
 # Matches hyphenated device names ending in a numeric segment: sw-core-01, rtr-edge-02
 DEVICE_PATTERN = re.compile(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*-\d+)\b", re.IGNORECASE)
 
-# Extracts an IPv4 address for ping target
+# Extracts an IPv4 address for ping target or endpoint diagnosis
 IP_PATTERN = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+# Extracts common MAC address formats:
+# aabb.cc00.0101, aa:bb:cc:00:01:01, or aa-bb-cc-00-01-01.
+MAC_PATTERN = re.compile(
+    r"\b("
+    r"(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|"
+    r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|"
+    r"(?:[0-9a-f]{2}-){5}[0-9a-f]{2}"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # "all" keyword triggers scope=ALL
 ALL_SCOPE_PATTERN = re.compile(r"\ball\b", re.IGNORECASE)
@@ -129,6 +144,20 @@ def parse_intent(query: str) -> IntentRequest:
             )
         ping_target = ip_match.group(1)
 
+    endpoint: Optional[str] = None
+    if intent == IntentType.DIAGNOSE_ENDPOINT:
+        ip_match = IP_PATTERN.search(query)
+        mac_match = MAC_PATTERN.search(query)
+        if ip_match:
+            endpoint = ip_match.group(1)
+        elif mac_match:
+            endpoint = mac_match.group(1)
+        else:
+            raise ValueError(
+                f"No endpoint IP or MAC found in diagnosis query: '{query}'\n"
+                "Example: 'diagnose endpoint 10.0.0.25 on sw-acc-01'"
+            )
+
     if scope == ScopeType.SINGLE and device is None:
         raise ValueError(
             f"No device name found in query: '{query}'\n"
@@ -141,6 +170,7 @@ def parse_intent(query: str) -> IntentRequest:
         device=device,
         scope=scope,
         ping_target=ping_target,
+        endpoint=endpoint,
         raw_query=query,
     )
     logger.info(

@@ -81,6 +81,7 @@ Read intents:
 | `show_etherchannel` | Bundles: group, protocol, flags, members |
 | `show_port_security` | Per-interface: secure MACs, violations, action |
 | `show_logging` | Last 20 syslog: timestamp, facility, severity, mnemonic |
+| `diagnose_endpoint` | Correlates ARP, MAC, port status, errors, port security, and STP for one IP/MAC |
 | `backup_config` | Saves to `output/backups/<device>_YYYYMMDD_HHMMSS.cfg` |
 | `health_check` | version + interfaces + vlans snapshot |
 | `device_facts` | Platform, IOS, uptime, port ratio |
@@ -138,7 +139,8 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
   "verbose":     false,
   "vlan_id":     0,
   "vlan_name":   "",
-  "interface":   ""
+  "interface":   "",
+  "endpoint":    "<IP or MAC — required when intent=diagnose_endpoint>"
 }
 ```
 
@@ -166,6 +168,8 @@ artifacts on disk.
   prefix, one neighbor). The adapter returns only matching rows, usually one.
   Works on: `show_arp`, `show_mac`, `show_route`, `show_interfaces`,
   `show_errors`, `show_cdp`, `show_logging`.
+- **`endpoint`** — IP or MAC for `diagnose_endpoint`. If omitted, the adapter
+  uses `query` as a fallback for compatibility.
 - **`verbose`** — default `false`. The adapter returns `summary` plus up to
   10 sample rows of `parsed_data` and sets `parsed_data_truncated: true`,
   `parsed_data_total_rows: N`. Set `verbose: true` only when the user needs

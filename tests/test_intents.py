@@ -137,6 +137,24 @@ def test_parse_ping_missing_ip_raises():
         parse_intent("ping from sw-core-01")
 
 
+def test_parse_diagnose_endpoint_ip():
+    req = parse_intent("diagnose endpoint 10.0.0.25 on sw-acc-01")
+    assert req.intent == IntentType.DIAGNOSE_ENDPOINT
+    assert req.device == "sw-acc-01"
+    assert req.endpoint == "10.0.0.25"
+
+
+def test_parse_diagnose_endpoint_mac():
+    req = parse_intent("troubleshoot aabb.cc00.0101 on sw-acc-01")
+    assert req.intent == IntentType.DIAGNOSE_ENDPOINT
+    assert req.endpoint == "aabb.cc00.0101"
+
+
+def test_parse_diagnose_endpoint_missing_endpoint_raises():
+    with pytest.raises(ValueError, match="No endpoint"):
+        parse_intent("diagnose endpoint on sw-acc-01")
+
+
 def test_parse_diff_backup():
     req = parse_intent("diff config on sw-core-01")
     assert req.intent == IntentType.DIFF_BACKUP

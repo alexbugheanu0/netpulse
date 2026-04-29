@@ -18,6 +18,7 @@ Usage — natural language:
     python3 -m app.main "audit trunks on sw-dist-01"
     python3 -m app.main "device facts for sw-acc-01"
     python3 -m app.main "drift check sw-core-01"
+    python3 -m app.main "diagnose endpoint 10.0.0.25 on sw-acc-01"
 
 Usage — structured flags (always unambiguous):
     python3 -m app.main --intent show_trunks   --device sw-dist-01
@@ -36,6 +37,7 @@ Usage — structured flags (always unambiguous):
     python3 -m app.main --intent audit_vlans   --scope all           # all devices (explicit)
     python3 -m app.main --intent device_facts  --device sw-acc-01
     python3 -m app.main --intent drift_check   --device sw-core-01
+    python3 -m app.main --intent diagnose_endpoint --device sw-acc-01 --endpoint 10.0.0.25
 
 Useful flags:
     --dry-run              Show what would run without connecting
@@ -100,6 +102,7 @@ COMMAND_PREVIEW: dict[IntentType, str] = {
     IntentType.SHOW_ETHERCHANNEL:  "show etherchannel summary",
     IntentType.SHOW_PORT_SECURITY: "show port-security",
     IntentType.SHOW_LOGGING:       "show logging",
+    IntentType.DIAGNOSE_ENDPOINT:  "show ip arp + show mac address-table + endpoint port evidence",
     # SSOT audit intents
     IntentType.AUDIT_VLANS:        "show vlan brief  →  compare vs ssot/vlans.yaml",
     IntentType.AUDIT_TRUNKS:       "show interfaces trunk  →  compare vs ssot/trunks.yaml",
@@ -144,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         help="Destination IP for --intent ping, e.g. 10.0.0.1",
+    )
+    parser.add_argument(
+        "--endpoint",
+        help="Endpoint IP or MAC for --intent diagnose_endpoint, e.g. 10.0.0.25",
     )
     parser.add_argument(
         "--filter",
@@ -202,17 +209,22 @@ def resolve_request(args: argparse.Namespace) -> IntentRequest:
         if args.scope:
             scope = ScopeType(args.scope)
 
+        raw_parts = ["--intent", args.intent]
+        if args.device:
+            raw_parts.extend(["--device", args.device])
+        if args.role:
+            raw_parts.extend(["--role", args.role])
+        if args.endpoint:
+            raw_parts.extend(["--endpoint", args.endpoint])
+
         return IntentRequest(
             intent=IntentType(args.intent),
             device=args.device,
             role=args.role,
             scope=scope,
             ping_target=args.target,
-            raw_query=(
-                f"--intent {args.intent} "
-                f"--device {args.device or ''} "
-                f"--role {args.role or ''}"
-            ).strip(),
+            endpoint=args.endpoint or (args.target if args.intent == "diagnose_endpoint" else None),
+            raw_query=" ".join(raw_parts),
         )
 
     if args.query:
@@ -236,6 +248,7 @@ def _runner_params(req: IntentRequest) -> dict:
         "vlan_id": req.vlan_id,
         "vlan_name": req.vlan_name,
         "interface": req.interface,
+        "endpoint": req.endpoint,
     }
 
 

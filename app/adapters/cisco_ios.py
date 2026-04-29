@@ -68,6 +68,7 @@ def build_intent_request(intent: str, params: dict[str, Any]) -> IntentRequest:
         vlan_id=params.get("vlan_id"),
         vlan_name=params.get("vlan_name"),
         interface=params.get("interface"),
+        endpoint=params.get("endpoint") or params.get("query") or params.get("target"),
     )
 
 

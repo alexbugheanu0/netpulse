@@ -179,6 +179,7 @@ Use this for scripts, CI, or quick checks. Chat users normally go through OpenCl
 python3 -m app.main --intent show_vlans --device sw-core-01
 python3 -m app.main --intent ping --device sw-core-01 --target 10.0.0.1
 python3 -m app.main --intent backup_config --device sw-acc-02
+python3 -m app.main --intent diagnose_endpoint --device sw-acc-01 --endpoint 10.0.0.25
 ```
 
 **All devices or by role**
