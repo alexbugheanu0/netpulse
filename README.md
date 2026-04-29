@@ -20,7 +20,7 @@ AI agents are useful for operations only when execution is bounded. NetPulse kee
 
 OpenClaw, CLI, and future integrations call the unified runner in `app/runner.py`. The runner builds an execution plan, classifies risk, checks approval state, routes to an adapter, verifies write actions, and saves an audit artifact.
 
-The current production adapter wraps existing Cisco IOS jobs in `app/jobs/`. Demo adapters for compute, storage, and instruments live under `app/adapters/` and return deterministic mock data.
+The current production adapter wraps existing Cisco IOS jobs in `app/jobs/`. Mock adapters for compute, storage, and instruments live under `app/adapters/` and return deterministic data.
 
 ## Safety Model
 
@@ -56,66 +56,13 @@ The current production adapter wraps existing Cisco IOS jobs in `app/jobs/`. Dem
 
 Plans are written under `output/plans/`. Audit reports are written under `output/audit/YYYY-MM-DD/<request_id>.json` and include request metadata, plan, risk decision, approval state, prechecks, execution results, postchecks, errors, final status, and duration.
 
-## Genesis-Style Demo
-
-Run the mock multi-domain demo without real Cisco devices. It simulates:
-"Prepare the lab environment for simulation job demo-001."
-
-```bash
-python3 demos/genesis_style/run_demo.py
-python3 demos/genesis_style/run_demo.py --dry-run
-python3 demos/genesis_style/run_demo.py --simulate-write
-python3 demos/genesis_style/run_demo.py --simulate-write --approve
-```
-
-- `python3 demos/genesis_style/run_demo.py` runs normal readiness checks only. Risk is `READ_ONLY`; no real infrastructure changes are executed.
-- `python3 demos/genesis_style/run_demo.py --dry-run` generates the plan and audit artifact without executing mock adapters.
-- `python3 demos/genesis_style/run_demo.py --simulate-write` shows the approval gate for a simulated infrastructure-modifying workflow. No adapters execute.
-- `python3 demos/genesis_style/run_demo.py --simulate-write --approve` simulates approved execution with mock adapters, verification, and audit.
-
-Sample output excerpt:
-
-```text
-2. Execution plan generated
-   - check_network_path -> demo network path (cisco_ios)
-   - check_compute_health -> simulation cluster (compute_mock)
-   - check_storage_path -> demo dataset path (storage_mock)
-   - check_instrument_status -> mock lab instrument (instrument_mock)
-   - verify_environment -> simulation job demo-001 (mock_verifier)
-Structured plan preview
-{
-  "request_id": "np-...",
-  "intent": "prepare_lab_environment",
-  "risk": "READ_ONLY",
-  "approval_required": false,
-  "steps": [
-    "check_network_path",
-    "check_compute_health",
-    "check_storage_path",
-    "check_instrument_status",
-    "verify_environment"
-  ]
-}
-3. Risk classification
-   READ_ONLY: Demo readiness checks only; no real infrastructure changes executed.
-6. JSON audit artifact path
-   output/audit/YYYY-MM-DD/np-....json
-Audit summary:
-- Request ID: np-...
-- Final status: success
-- Approval required: false
-- Approval received: false
-- Verification: passed
-- Duration: 1.2 ms
-```
-
 ## Current Limitations
 
 Production execution is still focused on Cisco IOS network operations. Compute, storage, and instrument adapters are mock-only. Verification is implemented for current VLAN/interface write intents and will grow as more write intents are added.
 
 ## Roadmap
 
-See [`ROADMAP.md`](ROADMAP.md) for the phased path from safety control plane to multi-domain adapters and Genesis-style research workflows.
+See [`ROADMAP.md`](ROADMAP.md) for the phased path from safety control plane to multi-domain adapters and policy-backed infrastructure workflows.
 
 ## Start Here
 

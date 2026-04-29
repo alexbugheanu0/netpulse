@@ -8,7 +8,6 @@ from app.models import Device, JobResult
 from app.planner import build_plan, serialize_plan
 from app.risk import RiskLevel, classify_intent
 from app.runner import run_request
-from demos.genesis_style.run_demo import audit_summary, build_plan_preview, run_demo
 
 
 def _patch_artifact_paths(monkeypatch, tmp_path: Path) -> None:
@@ -80,26 +79,6 @@ def test_risk_blocks_unknown_read_like_intents():
 
     assert decision.risk == RiskLevel.BLOCKED
     assert decision.allowed is False
-
-
-def test_mock_write_intent_requires_approval_by_default():
-    decision = classify_intent(
-        "prepare_instrument_mock",
-        {"domain": "instrument"},
-        ssot={"protected_vlans": [], "protected_devices": [], "protected_interfaces": []},
-    )
-
-    assert decision.risk == RiskLevel.LOW_CHANGE
-    assert decision.approval_required is True
-    assert decision.allowed is True
-
-
-def test_genesis_normal_demo_is_read_only():
-    decision = classify_intent("prepare_lab_environment", {"domain": "lab"})
-
-    assert decision.risk == RiskLevel.READ_ONLY
-    assert decision.approval_required is False
-    assert decision.reason == "Demo readiness checks only; no real infrastructure changes executed."
 
 
 def test_audit_artifact_is_written(tmp_path):
@@ -378,126 +357,7 @@ def test_runner_executes_with_signed_approval_receipt(monkeypatch, tmp_path):
     assert audit["approval_received"] is True
 
 
-def test_genesis_demo_intent_completes_successfully(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("real inventory used")))
-
-    result = run_request(
-        original_request="Prepare the lab environment for simulation job demo-001.",
-        normalized_intent="prepare_lab_environment",
-        params={"domain": "lab", "job_id": "demo-001"},
-        source="test",
-    )
-
-    assert result["success"] is True
-    assert result["status"] == "success"
-    assert result["risk_decision"]["risk"] == "READ_ONLY"
-    assert result["approval_required"] is False
-    assert result["verification"]["verified"] is True
-    assert len(result["execution_results"]) >= 4
-
-
-def test_genesis_dry_run_does_not_execute_adapters(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr("app.runner._execute_genesis_demo", lambda plan, params: (_ for _ in ()).throw(RuntimeError("executed")))
-
-    result = run_demo(dry_run=True)
-    audit = json.loads(Path(result["audit_path"]).read_text())
-
-    assert result["status"] == "dry_run"
-    assert result["execution_results"] == []
-    assert audit["final_status"] == "dry_run"
-    assert audit["duration_ms"] is not None
-
-
-def test_genesis_simulated_write_without_approval_is_gated(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr("app.runner._execute_genesis_demo", lambda plan, params: (_ for _ in ()).throw(RuntimeError("executed")))
-
-    result = run_demo(simulate_write=True)
-    audit = json.loads(Path(result["audit_path"]).read_text())
-
-    assert result["success"] is False
-    assert result["status"] == "approval_required"
-    assert result["risk_decision"]["risk"] == "LOW_CHANGE"
-    assert result["approval_required"] is True
-    assert result["execution_results"] == []
-    assert audit["final_status"] == "approval_required"
-    assert audit["approval_received"] is False
-
-
-def test_genesis_simulated_write_with_approval_executes_and_verifies(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-
-    result = run_demo(simulate_write=True, approve=True)
-    audit = json.loads(Path(result["audit_path"]).read_text())
-
-    assert result["success"] is True
-    assert result["status"] == "success"
-    assert result["risk_decision"]["risk"] == "LOW_CHANGE"
-    assert result["approval_required"] is True
-    assert result["verification"]["verified"] is True
-    assert any(item["intent"] == "allocate_simulation_nodes" for item in result["execution_results"])
-    assert any(item["intent"] == "prepare_instrument_mock" for item in result["execution_results"])
-    assert audit["final_status"] == "success"
-    assert audit["approval_received"] is True
-    assert audit["verification"]["verified"] is True
-    assert audit["duration_ms"] is not None
-
-
-def test_genesis_audit_artifact_contains_required_fields(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-
-    result = run_demo()
-    audit = json.loads(Path(result["audit_path"]).read_text())
-
-    for field in {
-        "request_id",
-        "timestamp",
-        "original_request",
-        "normalized_intent",
-        "plan",
-        "risk_decision",
-        "approval_required",
-        "approval_received",
-        "execution_results",
-        "verification",
-        "postchecks",
-        "final_status",
-        "duration_ms",
-        "errors",
-    }:
-        assert field in audit
-
-
-def test_genesis_plan_preview_matches_actual_plan(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-
-    result = run_demo()
-    preview = build_plan_preview(result)
-
-    assert preview["request_id"] == result["request_id"]
-    assert preview["intent"] == result["plan"]["normalized_intent"]
-    assert preview["risk"] == result["risk_decision"]["risk"]
-    assert preview["approval_required"] == result["approval_required"]
-    assert preview["steps"] == [step["action"] for step in result["plan"]["steps"]]
-
-
-def test_genesis_audit_summary_reads_saved_artifact(monkeypatch, tmp_path):
-    _patch_artifact_paths(monkeypatch, tmp_path)
-
-    result = run_demo()
-    summary = audit_summary(result)
-
-    assert summary["request_id"] == result["request_id"]
-    assert summary["final_status"] == "success"
-    assert summary["approval_required"] is False
-    assert summary["approval_received"] is False
-    assert summary["verification"] == "passed"
-    assert summary["duration_ms"] is not None
-
-
-def test_openclaw_telegram_formatting_has_no_genesis_demo_text():
+def test_openclaw_telegram_formatting_is_concise():
     from app.openclaw_adapter import _telegram_response, OpenClawResponse
 
     response = OpenClawResponse(
@@ -513,7 +373,6 @@ def test_openclaw_telegram_formatting_has_no_genesis_demo_text():
     payload = _telegram_response(response)
     rendered = json.dumps(payload)
 
-    assert "Genesis" not in rendered
     assert "Dry run enabled" not in rendered
     assert "Approval received" not in rendered
     assert "Verification passed" not in rendered

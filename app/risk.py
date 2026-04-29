@@ -58,26 +58,16 @@ READ_ONLY_INTENTS: frozenset[str] = frozenset({
     "audit_trunks",
     "device_facts",
     "drift_check",
-    "check_compute_health",
-    "check_node_availability",
-    "check_storage_path",
-    "check_dataset_available",
-    "verify_mount_ready",
-    "check_instrument_status",
-    "prepare_lab_environment",
 })
 
 LOW_CHANGE_INTENTS: frozenset[str] = frozenset({
     "add_vlan",
-    "prepare_instrument_mock",
-    "prepare_experiment_environment",
 })
 
 MEDIUM_CHANGE_INTENTS: frozenset[str] = frozenset({
     "remove_vlan",
     "no_shutdown_interface",
     "set_interface_vlan",
-    "allocate_simulation_nodes",
 })
 
 HIGH_RISK_INTENTS: frozenset[str] = frozenset({
@@ -103,13 +93,6 @@ def classify_intent(
     intent_name = _normalise_intent(intent)
 
     if intent_name in READ_ONLY_INTENTS:
-        if intent_name == "prepare_lab_environment":
-            return RiskDecision(
-                risk=RiskLevel.READ_ONLY,
-                approval_required=False,
-                allowed=True,
-                reason="Demo readiness checks only; no real infrastructure changes executed.",
-            )
         return RiskDecision(
             risk=RiskLevel.READ_ONLY,
             approval_required=False,

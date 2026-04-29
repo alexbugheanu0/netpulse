@@ -221,9 +221,6 @@ def _execute_plan(
     params: dict[str, Any],
     risk_decision: RiskDecision,
 ) -> list[Any]:
-    if intent in {"prepare_lab_environment", "prepare_experiment_environment"}:
-        return _execute_genesis_demo(plan, params)
-
     if plan.domain == "network":
         inventory = _load_inventory(params)
         injected_validate = params.get("_validate_request")
@@ -251,15 +248,6 @@ def _verify_if_needed(
     params: dict[str, Any],
     execution_results: list[Any],
 ) -> dict[str, Any] | None:
-    if intent in {"prepare_lab_environment", "prepare_experiment_environment"}:
-        success = _all_success(execution_results)
-        return {
-            "verified": success,
-            "checks": ["mock_network", "mock_compute", "mock_storage", "mock_instrument"],
-            "evidence": "All demo readiness checks passed." if success else execution_results,
-            "error": None if success else "demo_readiness_failed",
-        }
-
     if plan.domain != "network" or not is_write_intent(intent):
         return None
 
@@ -272,47 +260,6 @@ def _load_inventory(params: dict[str, Any]) -> dict[str, Any]:
         return params["_inventory"]
     loader = params.get("_inventory_loader") or load_inventory
     return loader()
-
-
-def _execute_genesis_demo(plan: ExecutionPlan, params: dict[str, Any]) -> list[dict[str, Any]]:
-    compute = ComputeMockAdapter()
-    storage = StorageMockAdapter()
-    instrument = InstrumentMockAdapter()
-    results: list[dict[str, Any]] = []
-
-    for step in plan.steps:
-        if step.action == "check_network_path":
-            result = {
-                "success": True,
-                "adapter": "cisco_ios",
-                "intent": step.action,
-                "summary": "Mock network path is reachable for simulation job demo-001.",
-                "parsed_data": {"path": "lab-net/demo-001", "reachable": True},
-            }
-        elif step.adapter == "compute_mock":
-            if step.action == "allocate_simulation_nodes":
-                result = compute.execute_write(step.action, params)
-            else:
-                result = compute.execute_read(step.action, params)
-        elif step.adapter == "storage_mock":
-            result = storage.execute_read(step.action, params)
-        elif step.adapter == "instrument_mock":
-            if step.action == "prepare_instrument_mock":
-                result = instrument.execute_write(step.action, params)
-            else:
-                result = instrument.execute_read(step.action, params)
-        else:
-            result = {
-                "success": True,
-                "adapter": step.adapter,
-                "intent": step.action,
-                "summary": "Mock environment verification passed.",
-                "parsed_data": {"verified": True},
-            }
-        step.status = "completed" if result.get("success") else "failed"
-        results.append(result)
-
-    return results
 
 
 def _mock_adapter(domain: str) -> Any:

@@ -17,7 +17,6 @@
 
 ## Phase 3: Collaboration / Research Alignment
 
-- Genesis-style demos
 - Policy-as-code
 - Reproducible execution reports
 - Integration with lab/HPC workflows

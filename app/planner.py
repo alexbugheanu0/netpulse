@@ -44,79 +44,6 @@ WRITE_COMMAND_PREVIEW: dict[str, str] = {
     "set_interface_vlan": "interface <interface> / switchport mode access / switchport access vlan <vlan_id>",
 }
 
-MOCK_DEMO_INTENTS: dict[str, list[dict[str, str]]] = {
-    "prepare_lab_environment": [
-        {
-            "action": "check_network_path",
-            "target": "demo network path",
-            "adapter": "cisco_ios",
-            "expected_result": "Network path is reachable for the simulation job.",
-        },
-        {
-            "action": "check_compute_health",
-            "target": "simulation cluster",
-            "adapter": "compute_mock",
-            "expected_result": "Compute nodes are healthy.",
-        },
-        {
-            "action": "check_storage_path",
-            "target": "demo dataset path",
-            "adapter": "storage_mock",
-            "expected_result": "Dataset and mount path are ready.",
-        },
-        {
-            "action": "check_instrument_status",
-            "target": "mock lab instrument",
-            "adapter": "instrument_mock",
-            "expected_result": "Instrument is ready for the simulation.",
-        },
-        {
-            "action": "verify_environment",
-            "target": "simulation job demo-001",
-            "adapter": "mock_verifier",
-            "expected_result": "All mocked readiness checks passed.",
-        },
-    ],
-    "prepare_experiment_environment": [
-        {
-            "action": "check_network_path",
-            "target": "demo network path",
-            "adapter": "cisco_ios",
-            "expected_result": "Network path is reachable for the simulation job.",
-        },
-        {
-            "action": "check_compute_health",
-            "target": "simulation cluster",
-            "adapter": "compute_mock",
-            "expected_result": "Compute nodes are healthy.",
-        },
-        {
-            "action": "allocate_simulation_nodes",
-            "target": "simulation cluster",
-            "adapter": "compute_mock",
-            "expected_result": "Simulation nodes are allocated.",
-        },
-        {
-            "action": "check_storage_path",
-            "target": "demo dataset path",
-            "adapter": "storage_mock",
-            "expected_result": "Dataset and mount path are ready.",
-        },
-        {
-            "action": "prepare_instrument_mock",
-            "target": "mock lab instrument",
-            "adapter": "instrument_mock",
-            "expected_result": "Instrument is prepared for the simulation.",
-        },
-        {
-            "action": "verify_environment",
-            "target": "simulation job demo-001",
-            "adapter": "mock_verifier",
-            "expected_result": "All mocked readiness and preparation checks passed.",
-        },
-    ],
-}
-
 
 @dataclass
 class PlanStep:
@@ -219,19 +146,6 @@ def _build_scope(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_steps(intent: str, params: dict[str, Any], domain: str) -> list[PlanStep]:
-    if intent in MOCK_DEMO_INTENTS:
-        return [
-            PlanStep(
-                step_id=f"step-{idx:02d}",
-                action=step["action"],
-                target=step["target"],
-                adapter=step["adapter"],
-                precheck="mock readiness check",
-                expected_result=step["expected_result"],
-            )
-            for idx, step in enumerate(MOCK_DEMO_INTENTS[intent], start=1)
-        ]
-
     target = _target_from_params(params)
     adapter = "cisco_ios" if domain == "network" else f"{domain}_mock"
     preview = _command_preview(intent, params)
@@ -252,8 +166,6 @@ def _build_steps(intent: str, params: dict[str, Any], domain: str) -> list[PlanS
 
 
 def _infer_domain(intent: str) -> str:
-    if intent in MOCK_DEMO_INTENTS:
-        return "lab"
     if intent.startswith(("check_compute", "allocate_simulation")):
         return "compute"
     if intent.startswith(("check_storage", "check_dataset", "verify_mount")):
