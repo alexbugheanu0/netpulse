@@ -260,57 +260,91 @@ else
     S_TESTS=false
 fi
 
-# ── Step 7 — OpenClaw (optional) ─────────────────────────────────────────────
+# ── Step 7 — OpenClaw integration ─────────────────────────────────────────────
 
-step "Step 7 — OpenClaw integration (optional)"
+step "Step 7 — OpenClaw + NetPulse integration"
 
 echo ""
-info "OpenClaw lets you query your switches from Telegram, WhatsApp, or Discord."
-read -rp "  Install OpenClaw now? [y/N]: " WANT_OPENCLAW
+info "OpenClaw connects NetPulse to Telegram, WhatsApp, and Discord."
+info "You chat — NetPulse runs safe intents on your switches."
+echo ""
 
-if [[ "${WANT_OPENCLAW,,}" == "y" ]]; then
-    # Install nvm if not present
-    export NVM_DIR="${HOME}/.nvm"
-    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-        info "Installing nvm..."
-        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-        # shellcheck source=/dev/null
-        \. "$NVM_DIR/nvm.sh"
-    else
-        # shellcheck source=/dev/null
-        \. "$NVM_DIR/nvm.sh"
-        ok "nvm already installed"
-    fi
+OPENCLAW_ALREADY_INSTALLED=false
+if command -v openclaw &>/dev/null; then
+    ok "OpenClaw already installed ($(openclaw --version 2>/dev/null | awk '{print $1" "$2}'))"
+    OPENCLAW_ALREADY_INSTALLED=true
+fi
 
-    # Install Node 22
-    if ! nvm ls 22 &>/dev/null; then
-        info "Installing Node.js 22..."
-        nvm install 22
-    fi
-    nvm use 22 --silent
-    ok "Node.js $(node --version)"
+SKILL_ALREADY_CONFIGURED=false
+if openclaw config get skills.load.extraDirs 2>/dev/null | grep -q "netpulse-project/skills" 2>/dev/null; then
+    ok "NetPulse skill already registered in OpenClaw"
+    SKILL_ALREADY_CONFIGURED=true
+fi
 
-    # Install OpenClaw
-    if ! command -v openclaw &>/dev/null; then
-        info "Installing OpenClaw..."
-        curl -fsSL https://openclaw.ai/install.sh | bash
-    else
-        ok "OpenClaw already installed"
-    fi
-
-    # Install NetPulse skill
-    mkdir -p ~/.openclaw/skills
-    cp -r skills/netpulse ~/.openclaw/skills/
-    ok "NetPulse skill installed to ~/.openclaw/skills/netpulse/"
-
-    info "Starting OpenClaw onboarding wizard..."
-    info "(You will be prompted to choose a model provider and paste your API key)"
-    echo ""
-    openclaw onboard --install-daemon || warn "Onboarding incomplete — run 'openclaw onboard --install-daemon' manually"
-
+if $OPENCLAW_ALREADY_INSTALLED && $SKILL_ALREADY_CONFIGURED; then
+    ok "OpenClaw + NetPulse already integrated — skipping"
     S_OPENCLAW=true
 else
-    info "Skipping OpenClaw — run this step later with: bash scripts/setup.sh"
+    read -rp "  Install and connect OpenClaw? [Y/n]: " WANT_OPENCLAW
+    [[ "${WANT_OPENCLAW,,}" != "n" ]] || WANT_OPENCLAW=false
+
+    if [[ "$WANT_OPENCLAW" != "false" ]]; then
+        # Install nvm + Node 22 if OpenClaw isn't already on PATH
+        if ! $OPENCLAW_ALREADY_INSTALLED; then
+            export NVM_DIR="${HOME}/.nvm"
+            if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+                info "Installing nvm..."
+                curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+                # shellcheck source=/dev/null
+                \. "$NVM_DIR/nvm.sh"
+            else
+                # shellcheck source=/dev/null
+                \. "$NVM_DIR/nvm.sh"
+                ok "nvm already installed"
+            fi
+
+            if ! nvm ls 22 &>/dev/null; then
+                info "Installing Node.js 22..."
+                nvm install 22
+            fi
+            nvm use 22 --silent
+            ok "Node.js $(node --version)"
+
+            info "Installing OpenClaw..."
+            curl -fsSL https://openclaw.ai/install.sh | bash
+        fi
+
+        # Replace hardcoded paths in SKILL.md with this machine's project root
+        info "Updating project paths in NetPulse skill..."
+        sed -i "s|/home/alex/netpulse-project|${PROJECT_ROOT}|g" skills/netpulse/SKILL.md
+        ok "Skill paths set to ${PROJECT_ROOT}"
+
+        # Register the skill with OpenClaw via extraDirs (no copy needed —
+        # OpenClaw reads directly from the project's skills/ directory)
+        info "Registering NetPulse skill with OpenClaw..."
+        openclaw config set skills.load.extraDirs "[\"${PROJECT_ROOT}/skills\"]"
+        ok "Skill registered — OpenClaw loads it from ${PROJECT_ROOT}/skills/"
+
+        # Restart gateway if running so it picks up the skill
+        if systemctl --user is-active openclaw-gateway &>/dev/null 2>&1 || \
+           systemctl is-active openclaw-gateway &>/dev/null 2>&1; then
+            info "Restarting OpenClaw gateway to load the skill..."
+            openclaw gateway restart 2>/dev/null || true
+        fi
+
+        # Only run onboarding if OpenClaw was newly installed
+        if ! $OPENCLAW_ALREADY_INSTALLED; then
+            echo ""
+            info "Starting OpenClaw onboarding wizard..."
+            info "(You will be prompted to choose a model provider and paste your API key)"
+            echo ""
+            openclaw onboard --install-daemon || warn "Onboarding incomplete — run 'openclaw onboard --install-daemon' manually"
+        fi
+
+        S_OPENCLAW=true
+    else
+        info "Skipping OpenClaw — run this step later with: bash scripts/setup.sh"
+    fi
 fi
 
 # ── Step 8 — Summary ─────────────────────────────────────────────────────────
@@ -329,14 +363,27 @@ else
     echo -e "${YELLOW}[--]${RESET}  No devices added (run: bash scripts/add-device.sh)"
 fi
 _status $S_TESTS    "Test suite"
-_status $S_OPENCLAW "OpenClaw integration"
+_status $S_OPENCLAW "OpenClaw + NetPulse integration"
 
 echo ""
-echo -e "${BOLD}Next steps:${RESET}"
+echo -e "${BOLD}How NetPulse + OpenClaw work together:${RESET}"
 echo ""
-echo "  source .venv/bin/activate"
-echo "  python3 -m app.main --intent health_check"
+echo "     Telegram/WhatsApp/Discord message"
+echo "        → OpenClaw reads skills/netpulse/SKILL.md"
+echo "        → builds a safe JSON payload"
+echo "        → runs scripts/run_openclaw_netpulse.sh"
+echo "        → NetPulse SSHes into your switch"
+echo "        → structured result → chat reply"
 echo ""
-echo "  # Add more devices later:"
-echo "  bash scripts/add-device.sh"
+echo -e "${BOLD}Quick start:${RESET}"
+echo ""
+echo "  CLI:"
+echo "    source .venv/bin/activate"
+echo "    python3 -m app.main --intent health_check --device sw-core-01"
+echo ""
+echo "  Chat:"
+echo "    Message your bot:  \"what vlans are on sw-core-01?\""
+echo "    OpenClaw + NetPulse handle the rest."
+echo ""
+echo "  Add devices:  bash scripts/add-device.sh"
 echo ""
