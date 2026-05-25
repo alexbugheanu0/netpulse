@@ -5,10 +5,8 @@ Credentials come from environment variables only (see config.py).
 Callers pass pre-approved command strings — no raw user input is
 forwarded to the device.
 
-Two entry points:
-  run_command()         — exec-mode: runs a single show command (read-only)
-  run_config_commands() — config-mode: applies a list of config lines via
-                          send_config_set() (write operations)
+Only fixed read commands against enrolled inventory devices are permitted.
+Configuration-mode execution is retained as a rejecting compatibility stub.
 
 TODO (OpenClaw integration): Add an optional session_log path parameter
 so OpenClaw can capture and analyse the full CLI session transcript.
@@ -22,7 +20,9 @@ from netmiko.exceptions import (
     NetmikoTimeoutException,
 )
 
+from app.access_policy import require_read_command
 from app.config import SSH_PASSWORD, SSH_PORT, SSH_SECRET, SSH_TIMEOUT, SSH_USERNAME
+from app.inventory import load_inventory
 from app.logger import get_logger
 from app.models import Device
 
@@ -35,6 +35,10 @@ def _connection_params(device: Device) -> dict:
         raise EnvironmentError(
             "SSH credentials are not set. "
             "Define NETPULSE_USERNAME and NETPULSE_PASSWORD in your .env file."
+        )
+    if SSH_SECRET:
+        raise EnvironmentError(
+            "NETPULSE_SECRET must be unset: NetPulse is configured for read-only device access."
         )
     params: dict = {
         "device_type": device.platform,
@@ -50,9 +54,21 @@ def _connection_params(device: Device) -> dict:
         # connection on Cisco IOS/IOS-XE without affecting output correctness.
         "fast_cli":    True,
     }
-    if SSH_SECRET:
-        params["secret"] = SSH_SECRET
     return params
+
+
+def _require_enrolled_device(device: Device) -> None:
+    """Allow connections only to the enabled inventory record being targeted."""
+
+    enrolled = load_inventory().get(device.name)
+    if not enrolled or not enrolled.ssh_enabled:
+        raise PermissionError(
+            f"Device '{device.name}' is not an SSH-enabled enrolled switch."
+        )
+    if enrolled.ip != device.ip:
+        raise PermissionError(
+            f"Device '{device.name}' does not match its enrolled inventory address."
+        )
 
 
 def run_command(device: Device, command: str) -> str:
@@ -62,16 +78,16 @@ def run_command(device: Device, command: str) -> str:
 
     Raises:
         EnvironmentError:                  SSH credentials not set in .env
-        NetmikoAuthenticationException:    bad username/password/enable secret
+        NetmikoAuthenticationException:    bad username/password
         NetmikoTimeoutException:           device unreachable or too slow
         Exception:                         any other Netmiko or network error
     """
-    logger.info(f"SSH → {device.name} ({device.ip}) | command: {command!r}")
+    _require_enrolled_device(device)
+    require_read_command(command)
+    logger.info(f"SSH → {device.name} ({device.ip}) | read command: {command!r}")
 
     try:
         with ConnectHandler(**_connection_params(device)) as conn:
-            if SSH_SECRET:
-                conn.enable()
             output: str = conn.send_command(command, read_timeout=SSH_TIMEOUT)
             logger.debug(f"Response from {device.name}: {len(output)} chars")
             return output
@@ -103,6 +119,9 @@ def run_commands(device: Device, commands: list[str]) -> dict[str, str]:
     that need per-command resilience should catch exceptions around this call
     and fall back to run_command() individually.
     """
+    _require_enrolled_device(device)
+    for command in commands:
+        require_read_command(command)
     logger.info(
         f"SSH → {device.name} ({device.ip}) | "
         f"{len(commands)} command(s) in one session: {commands}"
@@ -110,8 +129,6 @@ def run_commands(device: Device, commands: list[str]) -> dict[str, str]:
 
     try:
         with ConnectHandler(**_connection_params(device)) as conn:
-            if SSH_SECRET:
-                conn.enable()
             outputs: dict[str, str] = {}
             for cmd in commands:
                 outputs[cmd] = conn.send_command(cmd, read_timeout=SSH_TIMEOUT)
@@ -139,41 +156,9 @@ def run_config_commands(device: Device, commands: list[str]) -> str:
     Open an SSH session to device, enter global config mode, apply the given
     list of config lines via send_config_set(), and return the raw output.
 
-    The enable secret (SSH_SECRET) is required for config mode — if it is not
-    set the device will likely reject the config-mode entry attempt.
-
-    Callers must pass only pre-approved, hardcoded command lists — no raw
-    user input should ever reach this function directly.
-
-    Raises:
-        EnvironmentError:                  SSH credentials not set in .env
-        NetmikoAuthenticationException:    bad username/password/enable secret
-        NetmikoTimeoutException:           device unreachable or too slow
-        Exception:                         any other Netmiko or network error
+    This entry point exists for compatibility with legacy jobs only. Read-only
+    mode rejects it before any connection is opened.
     """
-    logger.info(
-        f"SSH config → {device.name} ({device.ip}) | "
-        f"{len(commands)} command(s): {commands}"
+    raise PermissionError(
+        "Device configuration commands are blocked: NetPulse is read-only."
     )
-
-    try:
-        with ConnectHandler(**_connection_params(device)) as conn:
-            if SSH_SECRET:
-                conn.enable()
-            output: str = conn.send_config_set(commands)
-            logger.debug(
-                f"Config response from {device.name}: {len(output)} chars"
-            )
-            return output
-
-    except NetmikoAuthenticationException as exc:
-        logger.error(f"Auth failed on {device.name} ({device.ip}): {exc}")
-        raise
-
-    except NetmikoTimeoutException as exc:
-        logger.error(f"Timeout on {device.name} ({device.ip}): {exc}")
-        raise
-
-    except Exception as exc:
-        logger.error(f"SSH config error on {device.name} ({device.ip}): {exc}")
-        raise

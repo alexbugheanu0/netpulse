@@ -89,7 +89,7 @@ def check_reachability(
     timeout: float = 2.0,
 ) -> dict[str, bool]:
     """
-    TCP connect check for each device on the given port (default: 22).
+    TCP connect check for each SSH-enabled enrolled device on the given port.
 
     Runs checks in parallel — safe to call on large inventories.
     Returns {device_name: reachable (bool)}.
@@ -101,10 +101,16 @@ def check_reachability(
         except OSError:
             return name, False
 
-    workers = min(len(inventory), 20)
+    eligible = {
+        name: device for name, device in inventory.items() if device.ssh_enabled
+    }
+    if not eligible:
+        return {}
+
+    workers = min(len(eligible), 20)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
             pool.submit(_probe, name, device.ip)
-            for name, device in inventory.items()
+            for name, device in eligible.items()
         ]
         return dict(f.result() for f in futures)

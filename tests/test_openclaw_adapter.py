@@ -134,7 +134,6 @@ def test_allowlist_contains_required_intents():
         IntentType.SHOW_CDP,
         IntentType.SHOW_MAC,
         IntentType.SHOW_SPANNING_TREE,
-        IntentType.PING,
         # New CCIE intents
         IntentType.SHOW_ROUTE,
         IntentType.SHOW_ARP,
@@ -149,6 +148,18 @@ def test_allowlist_contains_required_intents():
 def test_allowlist_includes_diff_backup():
     """diff_backup is a local-file-only job and is safe to expose via OpenClaw."""
     assert IntentType.DIFF_BACKUP in OPENCLAW_ALLOWED_INTENTS
+
+
+def test_allowlist_excludes_probes_and_device_writes():
+    prohibited = {
+        IntentType.PING,
+        IntentType.ADD_VLAN,
+        IntentType.REMOVE_VLAN,
+        IntentType.SHUTDOWN_INTERFACE,
+        IntentType.NO_SHUTDOWN_INTERFACE,
+        IntentType.SET_INTERFACE_VLAN,
+    }
+    assert prohibited.isdisjoint(OPENCLAW_ALLOWED_INTENTS)
 
 
 # ── Schema validation ──────────────────────────────────────────────────────────
@@ -186,21 +197,17 @@ def test_unknown_intent_rejected():
     with p1, p2, p3:
         resp = run_openclaw({"intent": "delete_all_configs", "device": "sw-core-01"})
     assert resp["success"] is False
-    assert "delete_all_configs" in resp["error"]
+    assert "blocked" in resp["error"].lower()
 
 
 def test_disallowed_intent_rejected():
-    """Adapter blocks a recognised IntentType that is not in OPENCLAW_ALLOWED_INTENTS."""
-    import app.openclaw_adapter as oc_mod
-
-    # Temporarily shrink the allowlist so show_vlans is excluded, exercising the
-    # disallowed-intent code path without touching production state.
-    trimmed = frozenset(i for i in oc_mod.OPENCLAW_ALLOWED_INTENTS if i != IntentType.SHOW_VLANS)
+    """Adapter blocks a recognised but prohibited external-probe intent."""
     p1, p2, p3 = _patch_all()
-    with p1, p2, p3, patch.object(oc_mod, "OPENCLAW_ALLOWED_INTENTS", trimmed):
-        resp = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
+    with p1, p2, p3 as execute_mock:
+        resp = run_openclaw({"intent": "ping", "device": "sw-core-01", "ping_target": "8.8.8.8"})
     assert resp["success"] is False
-    assert "not permitted" in resp["error"]
+    assert resp["status"] == "blocked"
+    execute_mock.assert_not_called()
 
 
 # ── Successful requests ────────────────────────────────────────────────────────
@@ -743,13 +750,9 @@ def test_telegram_response_redacts_secret_patterns():
     assert "NETPULSE_SECRET=[REDACTED]" in serialised
 
 
-# ── Approval workflow ─────────────────────────────────────────────────────────
+# ── Device writes are disabled ────────────────────────────────────────────────
 
-def test_openclaw_write_requires_pending_approval(monkeypatch, tmp_path):
-    import app.approval as approval_mod
-
-    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
-    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+def test_openclaw_write_is_blocked_without_execution():
     p1, p2, p3 = _patch_all()
     with p1, p2, p3 as execute_mock:
         resp = run_openclaw({
@@ -762,16 +765,13 @@ def test_openclaw_write_requires_pending_approval(monkeypatch, tmp_path):
         })
 
     assert resp["success"] is False
-    assert resp["status"] == "approval_required"
-    assert resp["approval"]["request_id"] == resp["request_id"]
+    assert resp["status"] == "blocked"
+    assert resp["approval_required"] is False
+    assert resp["audit_path"]
     execute_mock.assert_not_called()
 
 
-def test_openclaw_legacy_approval_received_cannot_bypass(monkeypatch, tmp_path):
-    import app.approval as approval_mod
-
-    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
-    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+def test_openclaw_legacy_approval_received_cannot_bypass():
     p1, p2, p3 = _patch_all()
     with p1, p2, p3 as execute_mock:
         resp = run_openclaw({
@@ -785,15 +785,11 @@ def test_openclaw_legacy_approval_received_cannot_bypass(monkeypatch, tmp_path):
         })
 
     assert resp["success"] is False
-    assert resp["status"] == "approval_required"
+    assert resp["status"] == "blocked"
     execute_mock.assert_not_called()
 
 
-def test_openclaw_confirmed_approval_executes(monkeypatch, tmp_path):
-    import app.approval as approval_mod
-
-    monkeypatch.setattr(approval_mod, "APPROVAL_STATE_DIR", tmp_path / "approvals")
-    monkeypatch.setattr(approval_mod, "APPROVAL_SECRET_PATH", tmp_path / "approval_secret")
+def test_openclaw_confirmed_approval_cannot_unlock_write():
     p1, p2, p3 = _patch_all(results=[
         JobResult(
             success=True,
@@ -812,30 +808,15 @@ def test_openclaw_confirmed_approval_executes(monkeypatch, tmp_path):
         "user": "alice",
     }
 
-    with p1, p2, p3:
-        pending = run_openclaw(payload)
-    monkeypatch.setattr(
-        "app.runner.CiscoIOSAdapter.verify",
-        lambda self, intent, params, execution_results: {"verified": True, "checks": ["mock"], "error": None},
-    )
-    p1, p2, p3 = _patch_all(results=[
-        JobResult(
-            success=True,
-            device="sw-core-01",
-            intent="add_vlan",
-            command_executed="vlan 250 / name TEST",
-            parsed_data={"vlan_id": 250, "vlan_name": "TEST"},
-        )
-    ])
-    with p1, p2, p3:
+    with p1, p2, p3 as execute_mock:
         approved = run_openclaw(payload | {
-            "request_id": pending["request_id"],
+            "request_id": "np-prohibited-write",
             "approval_response": "yes",
         })
 
-    assert approved["success"] is True
-    assert approved["status"] == "success"
-    assert approved["approval"]["approved_by"] == "alice"
+    assert approved["success"] is False
+    assert approved["status"] == "blocked"
+    execute_mock.assert_not_called()
 
 
 # ── OpenClawRequest schema ─────────────────────────────────────────────────────

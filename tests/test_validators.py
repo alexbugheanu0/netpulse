@@ -132,16 +132,17 @@ def test_diff_backup_all_scope_no_ssh_devices_is_allowed():
     validate_request(req, no_ssh_inv)  # should NOT raise
 
 
-# ── PING ───────────────────────────────────────────────────────────────────────
+# ── Prohibited external probes ─────────────────────────────────────────────────
 
-def test_ping_valid():
+def test_ping_is_blocked_even_for_valid_target():
     req = _req(IntentType.PING, device="sw-core-01", ping_target="10.0.0.1")
-    validate_request(req, INVENTORY)  # should not raise
+    with pytest.raises(ValueError, match="read-only"):
+        validate_request(req, INVENTORY)
 
 
-def test_ping_missing_target_raises():
+def test_ping_is_blocked_before_target_handling():
     req = _req(IntentType.PING, device="sw-core-01", ping_target=None)
-    with pytest.raises(ValueError, match="target IP"):
+    with pytest.raises(ValueError, match="read-only"):
         validate_request(req, INVENTORY)
 
 
@@ -344,8 +345,8 @@ def test_policy_check_fails_closed_when_protected_resources_malformed():
             policy_check(req)
 
 
-def test_validate_request_calls_policy_check_for_write_intents():
-    """validate_request() must invoke policy_check() for write intents."""
+def test_validate_request_blocks_write_intents_before_legacy_policy():
+    """Read-only deployment refuses writes regardless of protected-resource policy."""
     req = IntentRequest(
         intent=IntentType.REMOVE_VLAN,
         device="sw-core-01",
@@ -353,8 +354,7 @@ def test_validate_request_calls_policy_check_for_write_intents():
         vlan_id=10,
         raw_query="test",
     )
-    # policy_check raises for protected VLAN 10 — confirms it was called.
-    with _patch_protected(), pytest.raises(ValueError, match="protected resource"):
+    with _patch_protected(), pytest.raises(ValueError, match="read-only"):
         validate_request(req, INVENTORY)
 
 
@@ -367,7 +367,7 @@ def test_validate_request_does_not_call_policy_check_for_read_intents():
         validate_request(req, INVENTORY)  # should not raise
 
 
-# ── ping_target IP validation ──────────────────────────────────────────────────
+# ── ping is prohibited for every target shape ─────────────────────────────────
 
 def _ping_req(target: str) -> IntentRequest:
     return IntentRequest(
@@ -379,41 +379,13 @@ def _ping_req(target: str) -> IntentRequest:
     )
 
 
-def test_ping_valid_unicast_ipv4():
-    """A normal unicast IPv4 address must pass validation."""
-    validate_request(_ping_req("10.0.0.1"), INVENTORY)  # should not raise
+@pytest.mark.parametrize("target", ["10.0.0.1", "2001:db8::1", "not-an-ip", "255.255.255.255", "224.0.0.1", "0.0.0.0"])
+def test_ping_target_is_always_blocked(target):
+    with pytest.raises(ValueError, match="read-only"):
+        validate_request(_ping_req(target), INVENTORY)
 
 
-def test_ping_valid_unicast_ipv6():
-    """A normal unicast IPv6 address must pass validation."""
-    validate_request(_ping_req("2001:db8::1"), INVENTORY)  # should not raise
-
-
-def test_ping_invalid_string_rejected():
-    """A non-IP string must be rejected."""
-    with pytest.raises(ValueError, match="not a valid IP address"):
-        validate_request(_ping_req("not-an-ip"), INVENTORY)
-
-
-def test_ping_broadcast_ipv4_rejected():
-    """The IPv4 broadcast address must be rejected."""
-    with pytest.raises(ValueError, match="broadcast or multicast"):
-        validate_request(_ping_req("255.255.255.255"), INVENTORY)
-
-
-def test_ping_multicast_ipv4_rejected():
-    """A multicast IPv4 address must be rejected."""
-    with pytest.raises(ValueError, match="broadcast or multicast"):
-        validate_request(_ping_req("224.0.0.1"), INVENTORY)
-
-
-def test_ping_unspecified_address_rejected():
-    """The unspecified address (0.0.0.0) must be rejected."""
-    with pytest.raises(ValueError, match="broadcast or multicast"):
-        validate_request(_ping_req("0.0.0.0"), INVENTORY)
-
-
-# ── VLAN ID range validation ───────────────────────────────────────────────────
+# ── writes are blocked regardless of parameter values ─────────────────────────
 
 def _vlan_req(intent: IntentType, vlan_id: int, vlan_name: str = "TEST") -> IntentRequest:
     return IntentRequest(
@@ -426,31 +398,10 @@ def _vlan_req(intent: IntentType, vlan_id: int, vlan_name: str = "TEST") -> Inte
     )
 
 
-def test_vlan_id_zero_rejected():
-    """VLAN ID 0 is invalid and must be rejected."""
-    with _patch_protected(), pytest.raises(ValueError, match="out of range"):
-        validate_request(_vlan_req(IntentType.ADD_VLAN, 0), INVENTORY)
-
-
-def test_vlan_id_negative_rejected():
-    """Negative VLAN IDs must be rejected."""
-    with _patch_protected(), pytest.raises(ValueError, match="out of range"):
-        validate_request(_vlan_req(IntentType.REMOVE_VLAN, -1), INVENTORY)
-
-
-def test_vlan_id_4095_rejected():
-    """VLAN ID 4095 exceeds the valid range and must be rejected."""
-    with _patch_protected(), pytest.raises(ValueError, match="out of range"):
-        validate_request(_vlan_req(IntentType.ADD_VLAN, 4095), INVENTORY)
-
-
-def test_vlan_id_1_accepted():
-    """VLAN ID 1 is the minimum valid value."""
-    with _patch_protected():
-        validate_request(_vlan_req(IntentType.ADD_VLAN, 1, "DEFAULT"), INVENTORY)  # should not raise
-
-
-def test_vlan_id_4094_accepted():
-    """VLAN ID 4094 is the maximum valid value."""
-    with _patch_protected():
-        validate_request(_vlan_req(IntentType.ADD_VLAN, 4094, "LAST"), INVENTORY)  # should not raise
+@pytest.mark.parametrize(
+    ("intent", "vlan_id"),
+    [(IntentType.ADD_VLAN, 0), (IntentType.REMOVE_VLAN, -1), (IntentType.ADD_VLAN, 4095), (IntentType.ADD_VLAN, 1), (IntentType.ADD_VLAN, 4094)],
+)
+def test_vlan_write_intents_are_always_blocked(intent, vlan_id):
+    with _patch_protected(), pytest.raises(ValueError, match="read-only"):
+        validate_request(_vlan_req(intent, vlan_id), INVENTORY)

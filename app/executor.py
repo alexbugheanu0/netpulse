@@ -25,6 +25,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
+from app.access_policy import require_read_only_intent
 from app.config import SSH_WORKERS
 from app.inventory import get_all_devices, get_device, get_devices_by_role
 from app.logger import get_logger
@@ -129,6 +130,10 @@ def execute(req: IntentRequest, inventory: dict) -> list[JobResult]:
     All per-device SSH or I/O errors are caught inside each job module and
     returned as JobResult(success=False, error=...) — they do not propagate here.
     """
+    # Enforce policy here as well as in validators: internal callers cannot
+    # bypass read-only mode by dispatching directly into the executor.
+    require_read_only_intent(req.intent)
+
     # Special cases: intents that inject extra parameters at call time
     if req.intent == IntentType.PING:
         job_fn: Callable = lambda device: ping.run(device, req.ping_target)

@@ -8,9 +8,9 @@ an operator-friendly message.
 
 from __future__ import annotations
 
-import ipaddress
 import re
 
+from app.access_policy import require_read_only_intent
 from app.logger import get_logger
 from app.models import Device, IntentRequest, IntentType, ScopeType
 from app.ssot import load_protected_resources
@@ -60,6 +60,7 @@ def validate_request(
 
     Raises ValueError with a clear message on any violation.
     """
+    require_read_only_intent(req.intent)
     needs_ssh = req.intent not in NON_SSH_INTENTS
 
     # ── Write intent constraints ───────────────────────────────────────────────
@@ -96,28 +97,6 @@ def validate_request(
                     f"Intent '{req.intent.value}' requires an interface "
                     "(e.g. 'Gi1/0/5')."
                 )
-
-    if req.intent == IntentType.PING and not req.ping_target:
-        raise ValueError(
-            "A target IP is required for ping. "
-            "Use --target <ip> or include it in the query: 'ping 10.0.0.1 from sw-core-01'."
-        )
-
-    if req.intent == IntentType.PING and req.ping_target:
-        try:
-            addr = ipaddress.ip_address(req.ping_target)
-        except ValueError:
-            raise ValueError(
-                f"'{req.ping_target}' is not a valid IP address. "
-                "ping_target must be a valid unicast IPv4 or IPv6 address."
-            )
-        if addr.is_multicast or addr.is_unspecified or (
-            isinstance(addr, ipaddress.IPv4Address) and int(addr) == 0xFFFFFFFF
-        ):
-            raise ValueError(
-                f"'{req.ping_target}' is a broadcast or multicast address. "
-                "Only unicast addresses are permitted as a ping target."
-            )
 
     if req.intent == IntentType.DIAGNOSE_ENDPOINT:
         if not req.endpoint:
@@ -256,6 +235,8 @@ def policy_check(req: IntentRequest) -> None:
 
 
 def _valid_endpoint(value: str) -> bool:
+    import ipaddress
+
     try:
         addr = ipaddress.ip_address(value)
     except ValueError:

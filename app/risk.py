@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
 
+from app.access_policy import ALLOWED_READ_INTENTS
 from app.ssot import ProtectedResources, load_protected_resources
 
 
@@ -36,30 +37,7 @@ class RiskDecision:
         return data
 
 
-READ_ONLY_INTENTS: frozenset[str] = frozenset({
-    "show_interfaces",
-    "show_vlans",
-    "show_trunks",
-    "show_version",
-    "show_errors",
-    "show_cdp",
-    "show_mac",
-    "show_spanning_tree",
-    "ping",
-    "backup_config",
-    "diff_backup",
-    "health_check",
-    "show_route",
-    "show_arp",
-    "show_etherchannel",
-    "show_port_security",
-    "show_logging",
-    "diagnose_endpoint",
-    "audit_vlans",
-    "audit_trunks",
-    "device_facts",
-    "drift_check",
-})
+READ_ONLY_INTENTS: frozenset[str] = frozenset(i.value for i in ALLOWED_READ_INTENTS)
 
 LOW_CHANGE_INTENTS: frozenset[str] = frozenset({
     "add_vlan",
@@ -82,6 +60,7 @@ HIGH_RISK_INTENTS: frozenset[str] = frozenset({
 })
 
 WRITE_INTENTS: frozenset[str] = LOW_CHANGE_INTENTS | MEDIUM_CHANGE_INTENTS | HIGH_RISK_INTENTS
+DIRECTED_PROBE_INTENTS: frozenset[str] = frozenset({"ping"})
 
 
 def classify_intent(
@@ -101,6 +80,14 @@ def classify_intent(
             reason="Read-only intent; no configuration change requested.",
         )
 
+    if intent_name in DIRECTED_PROBE_INTENTS:
+        return RiskDecision(
+            risk=RiskLevel.BLOCKED,
+            approval_required=False,
+            allowed=False,
+            reason="Directed probes are blocked: NetPulse may read enrolled switches only.",
+        )
+
     if intent_name not in WRITE_INTENTS:
         return RiskDecision(
             risk=RiskLevel.BLOCKED,
@@ -109,31 +96,11 @@ def classify_intent(
             reason="Unknown or arbitrary CLI-style intent is blocked.",
         )
 
-    protected_decision = _protected_resource_decision(intent_name, params, ssot)
-    if protected_decision is not None:
-        return protected_decision
-
-    if intent_name in HIGH_RISK_INTENTS:
-        return RiskDecision(
-            risk=RiskLevel.HIGH_RISK,
-            approval_required=True,
-            allowed=True,
-            reason="Intent can disrupt connectivity or infrastructure state.",
-        )
-
-    if intent_name in MEDIUM_CHANGE_INTENTS:
-        return RiskDecision(
-            risk=RiskLevel.MEDIUM_CHANGE,
-            approval_required=True,
-            allowed=True,
-            reason="Write intent changes infrastructure state and requires approval.",
-        )
-
     return RiskDecision(
-        risk=RiskLevel.LOW_CHANGE,
-        approval_required=_requires_approval(intent_name),
-        allowed=True,
-        reason="Low-risk fixed intent; approval is required for real infrastructure writes.",
+        risk=RiskLevel.BLOCKED,
+        approval_required=False,
+        allowed=False,
+        reason="Device changes are blocked: NetPulse is configured for read-only access.",
     )
 
 

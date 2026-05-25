@@ -33,7 +33,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # Read from .env only. Empty string means "not set" — checked in ssh_client.py.
 SSH_USERNAME: str = os.getenv("NETPULSE_USERNAME", "")
 SSH_PASSWORD: str = os.getenv("NETPULSE_PASSWORD", "")
-SSH_SECRET:   str = os.getenv("NETPULSE_SECRET", "")   # enable secret; optional
+SSH_SECRET:   str = os.getenv("NETPULSE_SECRET", "")   # must remain unset in read-only mode
 SSH_TIMEOUT:  int = int(os.getenv("NETPULSE_SSH_TIMEOUT", "15"))
 SSH_PORT:     int = int(os.getenv("NETPULSE_SSH_PORT", "22"))
 

@@ -57,8 +57,9 @@ def test_risk_classification_read_write_and_blocked():
 
     assert read.risk == RiskLevel.READ_ONLY
     assert read.approval_required is False
-    assert write.risk == RiskLevel.LOW_CHANGE
-    assert write.approval_required is True
+    assert write.risk == RiskLevel.BLOCKED
+    assert write.allowed is False
+    assert write.approval_required is False
     assert blocked.risk == RiskLevel.BLOCKED
     assert blocked.allowed is False
 
@@ -146,7 +147,7 @@ def test_runner_validation_failure_still_writes_audit(monkeypatch, tmp_path):
     assert Path(result["audit_path"]).exists()
 
 
-def test_runner_requires_approval_before_write_execution(monkeypatch, tmp_path):
+def test_runner_blocks_write_before_execution(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
     monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
 
@@ -157,13 +158,13 @@ def test_runner_requires_approval_before_write_execution(monkeypatch, tmp_path):
     )
 
     assert result["success"] is False
-    assert result["status"] == "approval_required"
-    assert result["approval_required"] is True
+    assert result["status"] == "blocked"
+    assert result["approval_required"] is False
     assert result["execution_results"] == []
-    assert result["approval"]["request_id"] == result["request_id"]
+    assert Path(result["audit_path"]).exists()
 
 
-def test_runner_rejects_legacy_approval_received_without_receipt(monkeypatch, tmp_path):
+def test_runner_legacy_approval_cannot_unlock_write(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
     monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
 
@@ -175,125 +176,55 @@ def test_runner_rejects_legacy_approval_received_without_receipt(monkeypatch, tm
     )
 
     assert result["success"] is False
-    assert result["status"] == "approval_required"
+    assert result["status"] == "blocked"
     assert result["execution_results"] == []
 
 
-def test_runner_rejects_mismatched_approval_receipt(monkeypatch, tmp_path):
-    from app.approval import approve_pending_request
-
+def test_runner_receipt_cannot_unlock_write(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
     monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
     base_params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
-
-    pending = run_request(
+    result = run_request(
         original_request="add vlan 250",
         normalized_intent="add_vlan",
         params=base_params,
         user="alice",
         source="test",
-    )
-    receipt = approve_pending_request(
-        request_id=pending["request_id"],
-        approved_by="alice",
-        intent="add_vlan",
-        params=base_params,
-    )
-
-    changed_params = base_params | {"request_id": pending["request_id"], "vlan_id": 251}
-    result = run_request(
-        original_request="add vlan 251",
-        normalized_intent="add_vlan",
-        params=changed_params,
-        user="alice",
-        source="test",
-        approval_receipt=receipt,
+        approval_receipt={"receipt": "cannot-authorize-write"},
     )
 
     assert result["success"] is False
-    assert result["status"] == "approval_required"
-    assert "parameters" in result["error"].lower()
+    assert result["status"] == "blocked"
     assert result["execution_results"] == []
 
 
-def test_runner_rejects_expired_approval(monkeypatch, tmp_path):
-    from datetime import timedelta
-
-    from app import approval as approval_mod
-
+def test_runner_blocks_external_probe_intent(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
     monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
-    params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
-
-    pending = run_request(
-        original_request="add vlan 250",
-        normalized_intent="add_vlan",
-        params=params,
-        user="alice",
-        source="test",
-    )
-    future = approval_mod._now() + timedelta(minutes=20)
-    monkeypatch.setattr(approval_mod, "_now", lambda: future)
-
-    try:
-        approval_mod.approve_pending_request(
-            request_id=pending["request_id"],
-            approved_by="alice",
-            intent="add_vlan",
-            params=params,
-        )
-    except approval_mod.ApprovalError as exc:
-        assert "expired" in str(exc).lower()
-    else:
-        raise AssertionError("Expired approval was accepted")
-
-
-def test_runner_rejects_expired_approval_receipt(monkeypatch, tmp_path):
-    from datetime import timedelta
-    import json
-
-    from app import approval as approval_mod
-
-    _patch_artifact_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr("app.runner.load_inventory", lambda: (_ for _ in ()).throw(RuntimeError("executed")))
-    params = {"device": "sw-a-01", "scope": "single", "vlan_id": 250, "vlan_name": "TEST"}
-
-    pending = run_request(
-        original_request="add vlan 250",
-        normalized_intent="add_vlan",
-        params=params,
-        user="alice",
-        source="test",
-    )
-    receipt = approval_mod.approve_pending_request(
-        request_id=pending["request_id"],
-        approved_by="alice",
-        intent="add_vlan",
-        params=params,
-    )
-    record_path = approval_mod.APPROVAL_STATE_DIR / f"{pending['request_id']}.json"
-    record = json.loads(record_path.read_text())
-    record["expires_at"] = (approval_mod._now() - timedelta(seconds=1)).isoformat()
-    record_path.write_text(json.dumps(record))
-
     result = run_request(
-        original_request="add vlan 250",
-        normalized_intent="add_vlan",
-        params=params | {"request_id": pending["request_id"]},
-        user="alice",
-        source="test",
-        approval_receipt=receipt,
+        original_request="ping 8.8.8.8 from sw-a-01",
+        normalized_intent="ping",
+        params={"device": "sw-a-01", "scope": "single", "ping_target": "8.8.8.8"},
+    )
+
+    assert result["status"] == "blocked"
+    assert result["execution_results"] == []
+
+
+def test_runner_blocks_non_network_domain(monkeypatch, tmp_path):
+    _patch_artifact_paths(monkeypatch, tmp_path)
+    result = run_request(
+        original_request="show vlans outside network domain",
+        normalized_intent="show_vlans",
+        params={"device": "sw-a-01", "scope": "single", "domain": "compute"},
     )
 
     assert result["success"] is False
-    assert result["status"] == "approval_required"
-    assert "expired" in result["error"].lower()
+    assert result["status"] == "blocked"
     assert result["execution_results"] == []
 
 
-def test_runner_executes_with_signed_approval_receipt(monkeypatch, tmp_path):
-    from app.approval import approve_pending_request
-
+def test_runner_does_not_execute_write_even_with_injected_executor(monkeypatch, tmp_path):
     _patch_artifact_paths(monkeypatch, tmp_path)
     inventory = {
         "sw-a-01": Device(
@@ -322,39 +253,19 @@ def test_runner_executes_with_signed_approval_receipt(monkeypatch, tmp_path):
         "_executor_execute": lambda req, inv: [job_result],
     }
 
-    pending = run_request(
+    result = run_request(
         original_request="add vlan 250",
         normalized_intent="add_vlan",
         params=params,
         user="alice",
         source="test",
     )
-    receipt = approve_pending_request(
-        request_id=pending["request_id"],
-        approved_by="alice",
-        intent="add_vlan",
-        params=params,
-    )
-    monkeypatch.setattr(
-        "app.runner.CiscoIOSAdapter.verify",
-        lambda self, intent, params, execution_results: {"verified": True, "checks": ["mock"], "error": None},
-    )
 
-    approved = run_request(
-        original_request="add vlan 250",
-        normalized_intent="add_vlan",
-        params=params | {"request_id": pending["request_id"]},
-        user="alice",
-        source="test",
-        approval_receipt=receipt,
-    )
-
-    audit = json.loads(Path(approved["audit_path"]).read_text())
-    assert approved["success"] is True
-    assert approved["status"] == "success"
-    assert approved["execution_results"][0]["intent"] == "add_vlan"
-    assert approved["approval"]["approved_by"] == "alice"
-    assert audit["approval_received"] is True
+    audit = json.loads(Path(result["audit_path"]).read_text())
+    assert result["success"] is False
+    assert result["status"] == "blocked"
+    assert result["execution_results"] == []
+    assert audit["final_status"] == "blocked"
 
 
 def test_openclaw_telegram_formatting_is_concise():

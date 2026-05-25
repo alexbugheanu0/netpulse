@@ -45,6 +45,13 @@ def run_request(
     run_params.setdefault("original_request", original_request)
     plan = build_plan(normalized_intent, run_params, user=user, source=source, dry_run=dry_run)
     risk_decision = classify_intent(normalized_intent, run_params)
+    if plan.domain != "network":
+        risk_decision = RiskDecision(
+            risk=RiskLevel.BLOCKED,
+            approval_required=False,
+            allowed=False,
+            reason="Only enrolled network-switch reads are permitted in this NetPulse deployment.",
+        )
     _apply_risk_to_plan(plan, risk_decision)
 
     audit = start_audit(plan, risk_decision)

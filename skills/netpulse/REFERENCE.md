@@ -6,7 +6,6 @@ payload examples. Preloading it into every session wastes tokens.
 
 Suggested triggers for reading this file:
 - The user reports a symptom (flap, loop, drop) and you need a chaining playbook.
-- You are writing a write-intent approval message and want the canonical format.
 - You are about to return a complex diagnostic result and want the anomaly
   thresholds to flag correctly.
 
@@ -263,97 +262,8 @@ Present `aggregate_summary` first, then per-device summaries for any device with
 
 ---
 
-### Example 11 — Add a VLAN (write intent, requires approval)
+### Prohibited requests
 
-User: "add VLAN 50 called SERVERS2 to sw-core-01"
-
-Step 1 — Present for approval before calling the adapter:
-> ⚠️ **Config change requested**
-> - Device: `sw-core-01`
-> - Action: Add VLAN 50 named `SERVERS2`
-> - Commands: `vlan 50` / `name SERVERS2`
->
-> Confirm? Reply **yes** to execute or **no** to cancel.
-
-Step 2 — After user confirms, call the adapter:
-```json
-{"intent":"add_vlan","device":"sw-core-01","scope":"single","vlan_id":50,"vlan_name":"SERVERS2"}
-```
-
-Report `results[].summary`. If successful: "VLAN 50 (SERVERS2) added to sw-core-01."
-
----
-
-### Example 12 — Remove a VLAN (write intent, requires approval)
-
-User: "remove VLAN 50 from sw-core-01"
-
-Step 1 — Present for approval:
-> ⚠️ **Config change requested**
-> - Device: `sw-core-01`
-> - Action: Remove VLAN 50
-> - Command: `no vlan 50`
->
-> Confirm? Reply **yes** to execute or **no** to cancel.
-
-Step 2 — After confirmation:
-```json
-{"intent":"remove_vlan","device":"sw-core-01","scope":"single","vlan_id":50}
-```
-
----
-
-### Example 13 — Shut down an interface (write intent, requires approval)
-
-User: "shut down Gi1/0/5 on sw-acc-01"
-
-Step 1 — Present for approval:
-> ⚠️ **Config change requested**
-> - Device: `sw-acc-01`
-> - Action: Shut down interface `Gi1/0/5`
-> - Commands: `interface Gi1/0/5` / `shutdown`
->
-> Confirm? Reply **yes** to execute or **no** to cancel.
-
-Step 2 — After confirmation:
-```json
-{"intent":"shutdown_interface","device":"sw-acc-01","scope":"single","interface":"Gi1/0/5"}
-```
-
----
-
-### Example 14 — Bring up an interface (write intent, requires approval)
-
-User: "no shutdown Gi1/0/5 on sw-acc-01"
-
-Step 1 — Present for approval:
-> ⚠️ **Config change requested**
-> - Device: `sw-acc-01`
-> - Action: Enable interface `Gi1/0/5` (no shutdown)
-> - Commands: `interface Gi1/0/5` / `no shutdown`
->
-> Confirm? Reply **yes** to execute or **no** to cancel.
-
-Step 2 — After confirmation:
-```json
-{"intent":"no_shutdown_interface","device":"sw-acc-01","scope":"single","interface":"Gi1/0/5"}
-```
-
----
-
-### Example 15 — Set access VLAN on a port (write intent, requires approval)
-
-User: "set Gi1/0/10 on sw-acc-02 to VLAN 30"
-
-Step 1 — Present for approval:
-> ⚠️ **Config change requested**
-> - Device: `sw-acc-02`
-> - Action: Set `Gi1/0/10` as access port in VLAN 30
-> - Commands: `interface Gi1/0/10` / `switchport mode access` / `switchport access vlan 30`
->
-> Confirm? Reply **yes** to execute or **no** to cancel.
-
-Step 2 — After confirmation:
-```json
-{"intent":"set_interface_vlan","device":"sw-acc-02","scope":"single","interface":"Gi1/0/10","vlan_id":30}
-```
+NetPulse does not configure devices or issue directed probes. Requests for
+VLAN/interface changes, `ping`, arbitrary CLI, unlisted devices, or other
+infrastructure domains must be refused as blocked by read-only policy.

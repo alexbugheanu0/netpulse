@@ -25,7 +25,7 @@ class IntentType(str, Enum):
     SHOW_CDP           = "show_cdp"           # CDP/LLDP neighbours
     SHOW_MAC           = "show_mac"           # MAC address table
     SHOW_SPANNING_TREE = "show_spanning_tree" # STP port roles and states
-    PING               = "ping"              # ping <target> from device
+    PING               = "ping"              # compatibility value; blocked by read-only policy
     BACKUP_CONFIG      = "backup_config"     # save running-config to file
     DIFF_BACKUP        = "diff_backup"       # diff two most recent backups
     HEALTH_CHECK       = "health_check"      # version + interfaces + vlans
@@ -41,7 +41,7 @@ class IntentType(str, Enum):
     AUDIT_TRUNKS       = "audit_trunks"      # compare trunks vs ssot/trunks.yaml
     DEVICE_FACTS       = "device_facts"      # collect and summarise device facts
     DRIFT_CHECK        = "drift_check"       # combined VLAN + trunk audit
-    # Write / config-push intents (scope=single only; require Telegram approval)
+    # Legacy write intent identifiers; blocked by read-only policy.
     ADD_VLAN           = "add_vlan"          # add a VLAN to a device
     REMOVE_VLAN        = "remove_vlan"       # remove a VLAN from a device
     SHUTDOWN_INTERFACE    = "shutdown_interface"    # shut down an interface

@@ -40,6 +40,7 @@ class TestRunCommandsReturnsDict:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -59,6 +60,7 @@ class TestRunCommandsReturnsDict:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -84,6 +86,7 @@ class TestRunCommandsReturnsDict:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -106,6 +109,7 @@ class TestRunCommandsOpensOneConnection:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -127,6 +131,7 @@ class TestRunCommandsOpensOneConnection:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -140,14 +145,15 @@ class TestRunCommandsOpensOneConnection:
 
 
 class TestRunCommandsEnableBehaviour:
-    def test_enable_called_when_secret_set(self):
-        """conn.enable() must be invoked when SSH_SECRET is non-empty."""
+    def test_enable_secret_blocks_read_only_connection(self):
+        """An enable secret indicates an invalid privileged deployment."""
         conn = _make_conn_mock()
 
         with (
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", "secret"),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -155,9 +161,10 @@ class TestRunCommandsEnableBehaviour:
 
             from app.ssh_client import run_commands
 
-            run_commands(DEVICE, COMMANDS)
+            with pytest.raises(EnvironmentError, match="must be unset"):
+                run_commands(DEVICE, COMMANDS)
 
-        conn.enable.assert_called_once()
+        mock_ch.assert_not_called()
 
     def test_enable_not_called_when_no_secret(self):
         """conn.enable() must NOT be called when SSH_SECRET is an empty string."""
@@ -167,6 +174,7 @@ class TestRunCommandsEnableBehaviour:
             patch("app.ssh_client.SSH_USERNAME", "admin"),
             patch("app.ssh_client.SSH_PASSWORD", "pass"),
             patch("app.ssh_client.SSH_SECRET", ""),
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
             patch("app.ssh_client.ConnectHandler") as mock_ch,
         ):
             mock_ch.return_value.__enter__ = lambda s: conn
@@ -177,3 +185,48 @@ class TestRunCommandsEnableBehaviour:
             run_commands(DEVICE, COMMANDS)
 
         conn.enable.assert_not_called()
+
+
+class TestReadOnlyBoundary:
+    def test_unenrolled_device_is_rejected_before_connect(self):
+        from app.ssh_client import run_command
+
+        with (
+            patch("app.ssh_client.load_inventory", return_value={}),
+            patch("app.ssh_client.ConnectHandler") as mock_ch,
+            pytest.raises(PermissionError, match="not an SSH-enabled enrolled switch"),
+        ):
+            run_command(DEVICE, "show version")
+
+        mock_ch.assert_not_called()
+
+    def test_inventory_address_mismatch_is_rejected(self):
+        from app.ssh_client import run_command
+
+        other = DEVICE.model_copy(update={"ip": "10.0.0.2"})
+        with (
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: other}),
+            patch("app.ssh_client.ConnectHandler") as mock_ch,
+            pytest.raises(PermissionError, match="inventory address"),
+        ):
+            run_command(DEVICE, "show version")
+
+        mock_ch.assert_not_called()
+
+    def test_arbitrary_command_is_rejected_before_connect(self):
+        from app.ssh_client import run_command
+
+        with (
+            patch("app.ssh_client.load_inventory", return_value={DEVICE.name: DEVICE}),
+            patch("app.ssh_client.ConnectHandler") as mock_ch,
+            pytest.raises(PermissionError, match="read-only commands"),
+        ):
+            run_command(DEVICE, "configure terminal")
+
+        mock_ch.assert_not_called()
+
+    def test_config_command_path_is_always_rejected(self):
+        from app.ssh_client import run_config_commands
+
+        with pytest.raises(PermissionError, match="read-only"):
+            run_config_commands(DEVICE, ["interface Gi1/0/1", "shutdown"])

@@ -1,16 +1,15 @@
 ---
 name: netpulse
-description: AI-safe execution control plane for Cisco network operations. Uses fixed intents only, generates an execution plan, classifies risk, gates approval, executes through adapters, verifies writes, and returns audit-backed proof. Arbitrary CLI is forbidden.
+description: AI-safe execution control plane for read-only Cisco switch operations. Uses fixed read intents only, targets enrolled inventory devices, generates an execution plan, classifies risk, and returns audit-backed proof. Writes, probes, and arbitrary CLI are forbidden.
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "os": ["linux", "darwin"]}}
 ---
 
 # NetPulse — AI-Safe Infrastructure Execution
 
-Run structured diagnostics and approved config changes against Cisco switches via SSH.
+Run structured read-only diagnostics against enrolled Cisco switches via SSH.
 Every request maps to a fixed intent and typed parameters. No raw CLI ever reaches
-a device. NetPulse generates a plan before execution, classifies risk, requires
-approval for write/high-risk actions, verifies write actions after execution, and
-saves audit artifacts.
+a device. NetPulse generates a plan before execution, classifies risk, blocks
+write or external-probe requests, and saves audit artifacts.
 
 For per-intent anomaly thresholds, diagnostic chaining playbooks ("port not
 passing traffic", "link keeps flapping", etc.), and full payload examples,
@@ -25,15 +24,15 @@ it — keep token usage low.
 - Always use a fixed intent from the allowed list.
 - Generate a plan before execution.
 - Classify risk before execution.
-- Require approval for write or high-risk actions.
-- Verify after write actions.
+- Block all write actions and target-directed probes such as `ping`.
+- Connect only to SSH-enabled switches listed in `inventory/devices.yaml`.
 - Save audit artifacts.
 - Return proof: plan, risk, result evidence, verification, and audit path.
 
 Core loop:
 
 ```text
-intent -> plan -> risk check -> approval -> execute -> verify -> audit
+intent -> plan -> risk check -> read-only/inventory check -> execute -> audit
 ```
 
 ---
@@ -85,20 +84,10 @@ Read intents:
 | `backup_config` | Saves to `output/backups/<device>_YYYYMMDD_HHMMSS.cfg` |
 | `health_check` | version + interfaces + vlans snapshot |
 | `device_facts` | Platform, IOS, uptime, port ratio |
-| `ping` | Success rate, min/avg/max RTT. Requires `ping_target` |
 | `audit_vlans` / `audit_trunks` / `drift_check` | SSOT compliance audit |
 
-Write intents (`scope=single` only — require approval):
-
-| Intent | Required params |
-|---|---|
-| `add_vlan` | `vlan_id` (int), `vlan_name` (str), `device` |
-| `remove_vlan` | `vlan_id` (int), `device` |
-| `shutdown_interface` | `interface` (str), `device` |
-| `no_shutdown_interface` | `interface` (str), `device` |
-| `set_interface_vlan` | `interface` (str), `vlan_id` (int), `device` |
-
-Do NOT use the netpulse skill for arbitrary CLI or any intent not in the list above.
+`ping` and all configuration intents are blocked. Do NOT use the netpulse
+skill for arbitrary CLI or any intent not in the read-intent list above.
 
 ---
 
@@ -127,19 +116,13 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
   "device":      "<device name from inventory>",
   "scope":       "single | all | role",
   "role":        "<role name — required when scope=role>",
-  "ping_target": "<IPv4 — required when intent=ping>",
   "dry_run": false,
-  "approval_response": "<yes|no — only on follow-up approval calls>",
   "request_id": "<optional id from caller>",
   "user": "<optional user/chat identity>",
-  "approved_by": "<user who confirmed the pending request>",
   "source": "openclaw",
   "response_mode": "telegram",
   "query":       "<optional server-side filter>",
   "verbose":     false,
-  "vlan_id":     0,
-  "vlan_name":   "",
-  "interface":   "",
   "endpoint":    "<IP or MAC — required when intent=diagnose_endpoint>"
 }
 ```
@@ -238,43 +221,12 @@ Right:  "SW-CORE-01: IOS 15.2(4)E8 | 22/48 ports up | 5 VLANs."
 
 ---
 
-## SSOT change policy — read before every write intent
+## Prohibited requests
 
-Before calling the adapter for any write intent, read and evaluate:
-
-- `ssot/change-policy.yaml` — auto_approve / require_approval / forbidden rules
-- `ssot/protected-resources.yaml` — protected VLANs, devices, interfaces
-
-Decision:
-1. Matches a **forbidden** rule → refuse, do not call the adapter.
-2. Targets a protected resource → approval workflow.
-3. ALL **auto_approve** conditions satisfied → call adapter immediately.
-4. Otherwise → approval workflow.
-
-## Approval workflow for write intents
-
-**Never call the adapter for a write intent without explicit user confirmation.**
-
-1. Identify intent and parameters from the message.
-2. Present the proposed action:
-
-   > ⚠️ **Config change requested**
-   > - Device: `sw-core-01`
-   > - Action: Add VLAN 50 named `SERVERS2`
-   > - Commands: `vlan 50` / `name SERVERS2`
-   >
-   > Confirm? Reply **yes** to execute or **no** to cancel.
-
-3. Wait for the user's reply in Telegram.
-4. Call the adapter only if the reply is `yes` / `y` / `confirm` or equivalent,
-   using the same intent/parameters plus the original `request_id`,
-   `approved_by`, and `approval_response: "yes"`.
-5. If negative — abort and confirm cancellation.
-
-Do NOT execute write intents silently. Do NOT assume confirmation from the
-original request. Do NOT rely on `approval_received: true`; write execution
-requires the server-side pending approval and signed receipt flow. See
-REFERENCE.md examples 11–15 for the full payload shapes.
+Refuse requests to configure a device, send `ping` or another directed probe,
+target a device not listed in `inventory/devices.yaml`, use a disabled
+inventory entry, or operate on non-network infrastructure. Approval does not
+override this read-only policy.
 
 ---
 
@@ -286,7 +238,6 @@ REFERENCE.md examples 11–15 for the full payload shapes.
 - NEVER skip plan generation, risk classification, verification, or audit reporting.
 - For `scope=all`, omit `device`.
 - For `scope=role`, set `role` to `core`, `distribution`, or `access`.
-- `ping_target` is required only when `intent=ping`.
-- Write intents are `scope=single` only — bulk writes are forbidden.
-- NEVER execute a write or high-risk intent without explicit Telegram confirmation.
-- Return the audit path and verification evidence when reporting a completed change.
+- NEVER send a directed probe or execute any write intent.
+- Only SSH-enabled entries in inventory are authorized targets.
+- Return proof-oriented read summaries and preserve audit artifacts.

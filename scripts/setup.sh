@@ -101,16 +101,15 @@ if $WRITE_ENV; then
     info "Credentials are written to .env (never committed to git)."
     info "Passwords are hidden — nothing is shown while you type.\n"
 
-    read -rp  "  SSH username  [admin]: " SSH_USER
-    SSH_USER="${SSH_USER:-admin}"
+    info "Use a switch-side account restricted to read-only show commands."
+    read -rp  "  SSH username  [netpulse_readonly]: " SSH_USER
+    SSH_USER="${SSH_USER:-netpulse_readonly}"
 
     read -rsp "  SSH password: " SSH_PASS; echo ""
     while [ -z "$SSH_PASS" ]; do
         warn "Password cannot be empty."
         read -rsp "  SSH password: " SSH_PASS; echo ""
     done
-
-    read -rsp "  Enable secret (leave blank if unused): " SSH_SECRET; echo ""
 
     read -rp  "  SSH port      [22]: " SSH_PORT
     SSH_PORT="${SSH_PORT:-22}"
@@ -121,13 +120,12 @@ if $WRITE_ENV; then
     cat > .env <<EOF
 NETPULSE_USERNAME=${SSH_USER}
 NETPULSE_PASSWORD=${SSH_PASS}
-NETPULSE_SECRET=${SSH_SECRET}
 NETPULSE_SSH_TIMEOUT=${SSH_TIMEOUT}
 NETPULSE_SSH_PORT=${SSH_PORT}
 EOF
     chmod 600 .env
     ok "Credentials saved to .env (permissions: 600)"
-    warn "Never share .env or commit it to version control."
+    warn "Never share .env or commit it to version control. Do not configure an enable secret."
     S_ENV=true
 else
     ok "Keeping existing .env"

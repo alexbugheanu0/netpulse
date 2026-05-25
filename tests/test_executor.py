@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from app.executor import execute
 from app.models import Device, IntentRequest, IntentType, JobResult, ScopeType
 
@@ -71,3 +73,19 @@ def test_execute_turns_job_exception_into_failure_result():
     assert result.intent == "show_vlans"
     assert "boom" in (result.error or "").lower()
     assert result.elapsed_ms is not None
+
+
+@pytest.mark.parametrize("intent", [IntentType.PING, IntentType.ADD_VLAN])
+def test_execute_rejects_prohibited_intents_when_called_directly(intent):
+    req = IntentRequest(
+        intent=intent,
+        scope=ScopeType.SINGLE,
+        device="sw-a-01",
+        ping_target="8.8.8.8",
+        vlan_id=10,
+        vlan_name="TEST",
+        raw_query="test",
+    )
+
+    with pytest.raises(ValueError, match="read-only"):
+        execute(req, _inventory())

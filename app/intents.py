@@ -43,6 +43,7 @@ INTENT_PATTERNS: list[tuple[IntentType, list[str]]] = [
     (IntentType.SHOW_SPANNING_TREE, [r"\bspanning[\s_-]?tree\b", r"\bstp\b",
                                      r"\broot[\s_-]?bridge\b", r"\bdiscarding\b",
                                      r"\bblocking\b", r"\bforwarding\b"]),
+    # Kept recognisable so prohibited probe requests get a blocked audit result.
     (IntentType.PING,               [r"\bping\b"]),
     # L3 and advanced diagnostic intents
     (IntentType.SHOW_ROUTE,         [r"\brouting[\s_-]?table\b", r"\bshow\s+ip\s+route\b",
@@ -113,7 +114,7 @@ def parse_intent(query: str) -> IntentRequest:
         "show cdp neighbors on sw-dist-01"     -> show_cdp,      device=sw-dist-01
         "show mac table on sw-acc-01"          -> show_mac,      device=sw-acc-01
         "show spanning tree on sw-core-01"     -> show_spanning_tree
-        "ping 10.0.0.1 from sw-core-01"        -> ping, device=sw-core-01, ping_target=10.0.0.1
+        "ping 10.0.0.1 from sw-core-01"        -> blocked directed-probe request
         "diff config on sw-core-01"            -> diff_backup,   device=sw-core-01
 
     Raises ValueError with an operator-friendly message if intent or device

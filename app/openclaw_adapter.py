@@ -29,9 +29,8 @@ Request → Response flow:
 TODO (OpenClaw integration): Map OpenClaw tool call arguments directly to
 OpenClawRequest fields. The function run_openclaw(payload) is the tool handler.
 
-Approval workflow: write intents first return status=approval_required and a
-server-side pending approval. OpenClaw must send a follow-up confirmation with
-the same request_id; NetPulse then mints a signed approval receipt internally.
+Read-only deployment: configuration intents and target-directed probes are
+blocked before device execution and still produce plan/audit artifacts.
 
 TODO (Telegram/OpenClaw channel integration): Route channel messages through
 OpenClaw's intent classifier, then call this adapter with the classified intent.
@@ -40,9 +39,7 @@ The raw user message should never reach NetPulse directly.
 TODO (SNMP enrichment): Before execution, optionally call snmp_client functions
 to add live interface counters or sysDescr to the response context.
 
-TODO (Ansible execution path): For future config-push operations, route the
-intent here to an Ansible runner rather than Netmiko SSH. NetPulse stays
-read-only; Ansible handles approved write actions.
+NetPulse remains read-only; any future write-capable system must be separate.
 """
 
 from __future__ import annotations
@@ -55,6 +52,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ValidationError
 
+from app.access_policy import ALLOWED_READ_INTENTS
 from app import executor
 from app.approval import ApprovalError, approve_pending_request
 from app.inventory import load_inventory
@@ -74,43 +72,8 @@ logger = get_logger("netpulse.openclaw")
 PARSED_DATA_SAMPLE_SIZE = 10
 
 # ── Allowlist ──────────────────────────────────────────────────────────────────
-# Intents exposed to OpenClaw. Read-only intents run freely; write intents
-# require the agent to obtain explicit Telegram confirmation first (enforced
-# in SKILL.md — the adapter executes only after the user confirms).
-OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = frozenset({
-    # Operational show intents
-    IntentType.SHOW_INTERFACES,
-    IntentType.SHOW_VLANS,
-    IntentType.SHOW_TRUNKS,
-    IntentType.SHOW_VERSION,
-    IntentType.SHOW_ERRORS,
-    IntentType.SHOW_CDP,
-    IntentType.SHOW_MAC,
-    IntentType.SHOW_SPANNING_TREE,
-    # L3 and advanced diagnostics
-    IntentType.SHOW_ROUTE,
-    IntentType.SHOW_ARP,
-    IntentType.SHOW_ETHERCHANNEL,
-    IntentType.SHOW_PORT_SECURITY,
-    IntentType.SHOW_LOGGING,
-    IntentType.DIAGNOSE_ENDPOINT,
-    # Backup and health
-    IntentType.BACKUP_CONFIG,
-    IntentType.DIFF_BACKUP,
-    IntentType.HEALTH_CHECK,
-    IntentType.PING,
-    # SSOT audit intents
-    IntentType.AUDIT_VLANS,
-    IntentType.AUDIT_TRUNKS,
-    IntentType.DEVICE_FACTS,
-    IntentType.DRIFT_CHECK,
-    # Write / config-push intents (scope=single only; Telegram approval required)
-    IntentType.ADD_VLAN,
-    IntentType.REMOVE_VLAN,
-    IntentType.SHUTDOWN_INTERFACE,
-    IntentType.NO_SHUTDOWN_INTERFACE,
-    IntentType.SET_INTERFACE_VLAN,
-})
+# Intents exposed to OpenClaw in inventory-scoped read-only mode.
+OPENCLAW_ALLOWED_INTENTS: frozenset[IntentType] = ALLOWED_READ_INTENTS
 
 # Write intents that modify device config — the agent MUST obtain explicit
 # user confirmation in chat before calling the adapter with any of these.
@@ -135,9 +98,8 @@ class OpenClawRequest(BaseModel):
     OpenClaw must classify the user request into one of the allowed intents
     before calling this adapter. It must NOT forward raw user text as intent.
 
-    Write intents (add_vlan, remove_vlan, shutdown_interface,
-    no_shutdown_interface, set_interface_vlan) require the additional fields
-    below and must only be sent after the user confirms the action in chat.
+    Legacy write/probe fields remain schema-compatible, but their intents are
+    unconditionally blocked by read-only policy.
     """
 
     intent:    str               # must be in OPENCLAW_ALLOWED_INTENTS
@@ -287,25 +249,6 @@ def run_openclaw(payload: dict) -> dict:
         logger.warning(msg)
         return _err(oc_req.intent, oc_req.scope, msg)
 
-    # ── Step 3: check intent allowlist ────────────────────────────────────────
-    try:
-        intent_type = IntentType(oc_req.intent)
-    except ValueError:
-        msg = (
-            f"'{oc_req.intent}' is not a recognised NetPulse intent. "
-            f"Allowed via OpenClaw: {sorted(i.value for i in OPENCLAW_ALLOWED_INTENTS)}."
-        )
-        logger.warning(f"Unknown intent blocked: {oc_req.intent!r}")
-        return _err(oc_req.intent, oc_req.scope, msg)
-
-    if intent_type not in OPENCLAW_ALLOWED_INTENTS:
-        msg = (
-            f"Intent '{oc_req.intent}' is not permitted via OpenClaw. "
-            f"Allowed: {sorted(i.value for i in OPENCLAW_ALLOWED_INTENTS)}."
-        )
-        logger.warning(f"Disallowed intent blocked: {oc_req.intent!r}")
-        return _err(oc_req.intent, oc_req.scope, msg)
-
     runner_params = {
         "request_id": oc_req.request_id,
         "device": oc_req.device,
@@ -322,6 +265,17 @@ def run_openclaw(payload: dict) -> dict:
         "_validate_request": validate_request,
         "_executor_execute": executor.execute,
     }
+
+    # ── Step 3: check intent allowlist ────────────────────────────────────────
+    try:
+        intent_type = IntentType(oc_req.intent)
+    except ValueError:
+        logger.warning(f"Unknown intent blocked: {oc_req.intent!r}")
+        return _run_blocked_request(oc_req, runner_params)
+
+    if intent_type not in OPENCLAW_ALLOWED_INTENTS:
+        logger.warning(f"Disallowed intent blocked: {oc_req.intent!r}")
+        return _run_blocked_request(oc_req, runner_params)
 
     approval_receipt = oc_req.approval_receipt
     if oc_req.approval_response is not None:
@@ -715,6 +669,34 @@ def _err(intent: str, scope: str, error: str) -> dict:
         results=[],
         error=error,
     ), response_mode=None)
+
+
+def _run_blocked_request(oc_req: OpenClawRequest, runner_params: dict[str, Any]) -> dict:
+    """Run prohibited requests through lifecycle logging without execution."""
+
+    runner_result = run_request(
+        original_request=oc_req.raw_query or f"openclaw:{oc_req.intent}",
+        normalized_intent=oc_req.intent,
+        params=runner_params,
+        user=oc_req.user,
+        source=oc_req.source or "openclaw",
+        dry_run=oc_req.dry_run,
+    )
+    response = OpenClawResponse(
+        success=False,
+        intent=oc_req.intent,
+        scope=oc_req.scope,
+        results=[],
+        error=runner_result.get("error"),
+        status=runner_result.get("status"),
+        request_id=runner_result.get("request_id"),
+        plan=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("plan"),
+        risk_decision=None if _is_telegram_mode(oc_req.response_mode) else runner_result.get("risk_decision"),
+        approval_required=False,
+        plan_path=runner_result.get("plan_path"),
+        audit_path=runner_result.get("audit_path"),
+    )
+    return _safe_response(response, oc_req.response_mode)
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────────

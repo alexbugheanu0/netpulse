@@ -9,7 +9,6 @@ Usage — natural language:
     python3 -m app.main "show cdp neighbors on sw-dist-01"
     python3 -m app.main "show mac table on sw-acc-01"
     python3 -m app.main "show spanning tree on sw-core-01"
-    python3 -m app.main "ping 10.0.0.1 from sw-core-01"
     python3 -m app.main "backup config from sw-acc-02"
     python3 -m app.main "diff config on sw-core-01"
     python3 -m app.main "health check all switches"
@@ -27,7 +26,6 @@ Usage — structured flags (always unambiguous):
     python3 -m app.main --intent show_cdp      --device sw-dist-01
     python3 -m app.main --intent show_mac      --device sw-acc-01
     python3 -m app.main --intent show_spanning_tree --device sw-core-01
-    python3 -m app.main --intent ping          --device sw-core-01 --target 10.0.0.1
     python3 -m app.main --intent backup_config --device sw-acc-02
     python3 -m app.main --intent diff_backup   --device sw-core-01
     python3 -m app.main --intent health_check                        # all devices
@@ -59,6 +57,7 @@ import json
 import sys
 
 from app import executor  # imported for compatibility with existing tests/tools
+from app.access_policy import ALLOWED_READ_INTENTS
 from app.formatter import (
     print_banner,
     print_error,
@@ -92,7 +91,6 @@ COMMAND_PREVIEW: dict[IntentType, str] = {
     IntentType.SHOW_CDP:           "show cdp neighbors detail",
     IntentType.SHOW_MAC:           "show mac address-table",
     IntentType.SHOW_SPANNING_TREE: "show spanning-tree",
-    IntentType.PING:               "ping <target> repeat 5",
     IntentType.BACKUP_CONFIG:      "show running-config  →  output/backups/",
     IntentType.DIFF_BACKUP:        "(local file diff — no SSH)",
     IntentType.HEALTH_CHECK:       "show version + show interfaces status + show vlan brief",
@@ -119,7 +117,6 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             '  python3 -m app.main "show errors on sw-core-01"\n'
-            '  python3 -m app.main "ping 10.0.0.1 from sw-core-01"\n'
             '  python3 -m app.main "health check all switches"\n'
             "  python3 -m app.main --intent show_vlans  --device sw-core-01\n"
             "  python3 -m app.main --intent show_errors --role access\n"
@@ -133,8 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--intent",
-        choices=[i.value for i in IntentType],
-        help="Explicit intent (bypasses NL parsing)",
+        metavar="READ_INTENT",
+        help=(
+            "Explicit read intent (allowed: "
+            + ", ".join(sorted(i.value for i in ALLOWED_READ_INTENTS))
+            + "); prohibited or unknown intents are audited and blocked"
+        ),
     )
     parser.add_argument(
         "--device",
@@ -146,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--target",
-        help="Destination IP for --intent ping, e.g. 10.0.0.1",
+        help="Reserved compatibility field; external ping probes are blocked in read-only mode",
     )
     parser.add_argument(
         "--endpoint",

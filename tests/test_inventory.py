@@ -2,8 +2,9 @@
 
 import pytest
 import yaml
+from unittest.mock import patch
 
-from app.inventory import get_all_devices, get_device, load_inventory
+from app.inventory import check_reachability, get_all_devices, get_device, load_inventory
 
 SAMPLE_INVENTORY = {
     "devices": [
@@ -85,6 +86,17 @@ def test_get_all_devices_excludes_ssh_disabled(inventory_file):
     disabled_names = {name for name, d in inv.items() if not d.ssh_enabled}
     returned_names = {d.name for d in devices}
     assert disabled_names.isdisjoint(returned_names)
+
+
+def test_check_reachability_probes_only_ssh_enabled_inventory_devices(inventory_file):
+    inv = load_inventory(inventory_file)
+
+    with patch("app.inventory.socket.create_connection") as connect:
+        connect.return_value.__enter__.return_value = object()
+        result = check_reachability(inv)
+
+    assert result == {"sw-core-01": True}
+    connect.assert_called_once_with(("192.168.1.1", 22), timeout=2.0)
 
 
 def test_load_inventory_duplicate_name_logs_warning(tmp_path, caplog):

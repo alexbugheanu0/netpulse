@@ -34,16 +34,16 @@ app/openclaw_adapter.py
          ▼
 NetPulse lifecycle
   request → intent → execution plan → risk classification
-  → approval gate → adapter execution → verification → audit artifact
+  → inventory/read-only gate → adapter execution → audit artifact
          │
          ▼
 JSON response → summary → chat reply
 ```
 
 The adapter enforces an explicit intent allowlist and never lets any string from OpenClaw reach the
-device SSH session directly. Read-only intents run without approval. Write intents require explicit
-approval and are still checked against SSOT/protected-resource policy before execution. Unknown
-intents and arbitrary CLI remain blocked.
+device SSH session directly. Only fixed read intents against SSH-enabled entries in
+`inventory/devices.yaml` are allowed. Device changes, directed probes such as
+`ping`, non-network operations, unknown intents, and arbitrary CLI are blocked.
 
 ---
 
@@ -65,14 +65,15 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env and fill in:
-#   NETPULSE_USERNAME=admin
+#   NETPULSE_USERNAME=netpulse_readonly
 #   NETPULSE_PASSWORD=yourpassword
+# NETPULSE_SECRET must not be configured; enable-mode access is refused.
 ```
 
 **Option B — OpenClaw secrets store (keeps credentials out of the filesystem)**
 
 ```bash
-openclaw secrets set NETPULSE_USERNAME admin
+openclaw secrets set NETPULSE_USERNAME netpulse_readonly
 openclaw secrets set NETPULSE_PASSWORD yourpassword
 ```
 
@@ -130,8 +131,8 @@ source .venv/bin/activate
 # Unknown device — should return JSON error
 ./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-nonexistent","scope":"single"}'
 
-# Missing ping target — should return JSON error
-./scripts/run_openclaw_netpulse.sh '{"intent":"ping","device":"sw-core-01","scope":"single"}'
+# Directed probe — should return blocked with an audit artifact
+./scripts/run_openclaw_netpulse.sh '{"intent":"ping","device":"sw-core-01","scope":"single","ping_target":"8.8.8.8"}'
 
 # Schema error (missing intent) — should return JSON error
 ./scripts/run_openclaw_netpulse.sh '{"device":"sw-core-01"}'
@@ -186,7 +187,6 @@ reply with a VLAN summary.
 | `show_logging` | `show logging` | timestamp, facility, severity_code, mnemonic, message (last 20) |
 | `backup_config` | `show running-config` | Saved to `output/backups/` |
 | `health_check` | version + interfaces + vlans | Combined health snapshot |
-| `ping` | `ping <target> repeat 5` | success_rate, sent, received, min_ms, avg_ms, max_ms |
 
 ### SSOT audit intents
 
@@ -211,25 +211,19 @@ reply with a VLAN summary.
   "role": "<role name — required when scope=role>",
   "raw_query": "<original user message — optional, for audit>",
   "dry_run": false,
-  "approval_response": "<yes|no — only on follow-up approval calls>",
   "request_id": "<optional caller-provided id>",
   "user": "<optional user/chat identity>",
-  "approved_by": "<user who confirmed the pending request>",
   "source": "openclaw",
   "response_mode": "full | telegram",
   "query": "<optional server-side filter>",
   "verbose": false,
-  "ping_target": "<required for ping>",
-  "vlan_id": 0,
-  "vlan_name": "",
-  "interface": ""
+  "endpoint": "<IP or MAC, required for diagnose_endpoint>"
 }
 ```
 
-Set `dry_run: true` to generate a plan and audit artifact without execution. Set
-`approval_response: "yes"` only on a second call that references the `request_id`
-returned by the pending approval response. Do not use `approval_received`; it is
-kept for compatibility but cannot unlock write execution.
+Set `dry_run: true` to generate a plan and audit artifact without execution.
+Legacy write/probe fields may still parse for compatibility, but their intents
+are blocked and no approval value can unlock them.
 Use `response_mode: "telegram"` for Telegram/chat replies; it keeps the returned JSON compact while
 preserving the full plan and audit artifacts on disk. Keep `verbose: false` for normal chat use and
 use `query` for large ARP, MAC, route, interface, error, CDP, or logging lookups.
@@ -285,43 +279,12 @@ summary fields plus `request_id` and `audit_path`.
 
 **Present `results[].summary` in chat** — it is already formatted for human reading.
 
-### Write approval flow
+### Blocked operations
 
-Write intents are two-step. The first call plans and records a pending approval
-without executing device changes:
-
-```json
-{
-  "intent": "add_vlan",
-  "device": "sw-core-01",
-  "scope": "single",
-  "vlan_id": 50,
-  "vlan_name": "SERVERS2",
-  "user": "alice"
-}
-```
-
-The response includes `status: "approval_required"`, a `request_id`, an
-`approval.expires_at` timestamp, and an audit path. After the user confirms in
-chat, call the same intent and parameters with the original `request_id`:
-
-```json
-{
-  "intent": "add_vlan",
-  "device": "sw-core-01",
-  "scope": "single",
-  "vlan_id": 50,
-  "vlan_name": "SERVERS2",
-  "request_id": "np-...",
-  "user": "alice",
-  "approved_by": "alice",
-  "approval_response": "yes"
-}
-```
-
-NetPulse validates the pending record, expiry, requester, and parameter hash
-before minting a signed receipt internally. A mismatched, expired, already-used,
-or bare `approval_received: true` request does not execute.
+Requests for device changes, `ping` or other directed probes, devices outside
+the enabled inventory allowlist, and non-network domains produce `status:
+"blocked"` with plan and audit artifacts. They never reach an SSH execution
+path, and approval metadata cannot override the policy.
 
 ---
 
@@ -596,11 +559,11 @@ or bare `approval_received: true` request does not execute.
 
 ---
 
-### Error — missing required field
+### Error — blocked directed probe
 
 **Request:**
 ```json
-{"intent":"ping","device":"sw-core-01","scope":"single"}
+{"intent":"ping","device":"sw-core-01","scope":"single","ping_target":"8.8.8.8"}
 ```
 
 **Response:**
@@ -609,7 +572,8 @@ or bare `approval_received: true` request does not execute.
   "success": false,
   "intent":  "ping",
   "scope":   "single",
-  "error":   "A target IP is required for ping. Use --target <ip> or include it in the query: 'ping 10.0.0.1 from sw-core-01'.",
+  "status":  "blocked",
+  "error":   "Directed probes are blocked: NetPulse may read enrolled switches only.",
   "results": []
 }
 ```
@@ -651,7 +615,7 @@ The intent allowlist and job dispatch model prevent this entirely.
    python3 -m app.main --intent your_new_intent --device sw-core-01
    ```
 
-2. Verify the job is read-only (or get explicit approval for write operations).
+2. Verify the job is read-only and uses only enrolled switch targets.
 
 3. Add it to `OPENCLAW_ALLOWED_INTENTS` in `app/openclaw_adapter.py`.
 
@@ -724,12 +688,13 @@ from app.config import SSH_USERNAME, SSH_PASSWORD, SSH_SECRET
 
 print("NETPULSE_USERNAME:", "set" if SSH_USERNAME else "missing")
 print("NETPULSE_PASSWORD:", "set" if SSH_PASSWORD else "missing")
-print("NETPULSE_SECRET:", "set" if SSH_SECRET else "missing/unused")
+print("NETPULSE_SECRET:", "invalid if set" if SSH_SECRET else "unset (required)")
 PY
 ```
 
 Never print, paste, or send `.env` contents, OpenClaw secrets, SSH passwords, or
-enable secrets in Telegram or chat. If any credential value appears in chat,
+enable secrets in Telegram or chat. Do not configure an enable secret for this
+read-only deployment. If any credential value appears in chat,
 rotate it before continuing.
 
 If a required value is missing, check:
@@ -739,7 +704,7 @@ If a required value is missing, check:
 
 Alternatively, store credentials in the OpenClaw secrets store:
 ```bash
-openclaw secrets set NETPULSE_USERNAME admin
+openclaw secrets set NETPULSE_USERNAME netpulse_readonly
 openclaw secrets set NETPULSE_PASSWORD yourpassword
 ```
 
@@ -754,9 +719,9 @@ openclaw secrets set NETPULSE_PASSWORD yourpassword
 Steps:
 1. Verify the username and password are correct with a manual SSH test:
    ```bash
-   ssh admin@192.168.100.11
+   ssh netpulse_readonly@192.168.100.11
    ```
-2. Check whether the switch requires an enable secret (`NETPULSE_SECRET` in `.env`).
+2. Confirm the SSH user can run the required show commands without enable mode.
 3. Confirm the switch allows SSH from this host (check SSH access-class ACL).
 
 ---
@@ -819,4 +784,4 @@ These are marked as TODO comments in the source code.
 |---|---|---|
 | `TODO (SNMP enrichment)` | `openclaw_adapter.py`, `models.py`, `inventory.py` | Pre-flight SNMP reachability and counter data |
 | `TODO (diff mode)` | `openclaw_adapter.py`, `parsers.py` | Add `diff_backup` to allowlist for post-change audits |
-| `TODO (Ansible execution path)` | `openclaw_adapter.py` | Route approved write intents to Ansible instead of SSH |
+| Write workflows | Separate system only | NetPulse remains read-only |
