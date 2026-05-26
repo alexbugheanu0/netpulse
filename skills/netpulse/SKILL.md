@@ -135,7 +135,11 @@ cd /home/alex/netpulse-project && source .venv/bin/activate && python3 -m app.op
 | `all` | omit | — | All SSH-enabled devices |
 | `role` | omit | required | All devices with that role |
 
-**Prefer `scope=single` unless the user says "every/all/network-wide".**
+For a permitted status/read or audit request with no named device, role, or
+scope, omit the target and let NetPulse resolve it to `scope=all` across
+SSH-enabled inventory devices only.
+`backup_config`, `diff_backup`, and `diagnose_endpoint` require an explicit
+device, role, or scope.
 Multi-device calls multiply token cost linearly.
 If the user names a role such as core, distribution, or access, prefer
 `scope=role` over `scope=all`.

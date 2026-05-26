@@ -57,7 +57,7 @@ import json
 import sys
 
 from app import executor  # imported for compatibility with existing tests/tools
-from app.access_policy import ALLOWED_READ_INTENTS
+from app.access_policy import ALLOWED_READ_INTENTS, IMPLICIT_ALL_READ_INTENTS
 from app.formatter import (
     print_banner,
     print_error,
@@ -171,7 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Explicit scope override: single | all | role. "
             "When omitted, scope is derived from --device (single), "
-            "--role (role), or neither (all)."
+            "--role (role), or targetless status/audit reads (all). "
+            "Backup, diff, and endpoint diagnosis require a target or explicit scope."
         ),
     )
     parser.add_argument(
@@ -193,20 +194,29 @@ def resolve_request(args: argparse.Namespace) -> IntentRequest:
 
     --device and --role are mutually exclusive.
     Structured flags (--intent) take priority over a NL query.
-    Omitting both --device and --role with --intent targets all devices.
+    Omitting targeting with a status/audit --intent targets all enrolled
+    SSH-enabled devices. Backup, diff, and endpoint diagnosis require a
+    device, role, or explicit scope.
     """
     if args.intent:
         if args.device and args.role:
             raise ValueError("--device and --role are mutually exclusive.")
 
+        intent = IntentType(args.intent)
+
         if args.device:
             scope = ScopeType.SINGLE
         elif args.role:
             scope = ScopeType.ROLE
-        else:
+        elif args.scope:
+            scope = ScopeType(args.scope)
+        elif intent in IMPLICIT_ALL_READ_INTENTS:
             scope = ScopeType.ALL
+        else:
+            raise ValueError(
+                f"Intent '{intent.value}' requires --device, --role, or an explicit --scope."
+            )
 
-        # Explicit --scope overrides the derived value above.
         if args.scope:
             scope = ScopeType(args.scope)
 
@@ -219,7 +229,7 @@ def resolve_request(args: argparse.Namespace) -> IntentRequest:
             raw_parts.extend(["--endpoint", args.endpoint])
 
         return IntentRequest(
-            intent=IntentType(args.intent),
+            intent=intent,
             device=args.device,
             role=args.role,
             scope=scope,

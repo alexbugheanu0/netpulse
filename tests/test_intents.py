@@ -71,9 +71,18 @@ def test_parse_unknown_query_raises():
         parse_intent("do something weird on sw-core-01")
 
 
-def test_parse_missing_device_raises():
-    with pytest.raises(ValueError, match="No device name"):
-        parse_intent("show vlan without a device")
+def test_parse_targetless_status_read_defaults_to_all_inventory_devices():
+    req = parse_intent("show vlan status")
+    assert req.intent == IntentType.SHOW_VLANS
+    assert req.scope == ScopeType.ALL
+    assert req.device is None
+
+
+def test_parse_targetless_health_check_defaults_to_all_inventory_devices():
+    req = parse_intent("health check")
+    assert req.intent == IntentType.HEALTH_CHECK
+    assert req.scope == ScopeType.ALL
+    assert req.device is None
 
 
 # ── New intents ────────────────────────────────────────────────────────────────
@@ -155,6 +164,11 @@ def test_parse_diagnose_endpoint_missing_endpoint_raises():
         parse_intent("diagnose endpoint on sw-acc-01")
 
 
+def test_parse_targetless_diagnose_endpoint_requires_explicit_scope():
+    with pytest.raises(ValueError, match="No device name"):
+        parse_intent("diagnose endpoint 10.0.0.25")
+
+
 def test_parse_diff_backup():
     req = parse_intent("diff config on sw-core-01")
     assert req.intent == IntentType.DIFF_BACKUP
@@ -170,6 +184,12 @@ def test_parse_diff_backup_all_scope():
     req = parse_intent("diff config on all switches")
     assert req.intent == IntentType.DIFF_BACKUP
     assert req.scope  == ScopeType.ALL
+
+
+@pytest.mark.parametrize("query", ["backup running config", "diff config"])
+def test_targetless_artifact_reads_require_explicit_scope(query):
+    with pytest.raises(ValueError, match="No device name"):
+        parse_intent(query)
 
 
 # ── Priority / disambiguation ──────────────────────────────────────────────────
@@ -259,3 +279,9 @@ def test_drift_check_all_devices():
     req = parse_intent("drift check all switches")
     assert req.intent == IntentType.DRIFT_CHECK
     assert req.scope  == ScopeType.ALL
+
+
+def test_targetless_audit_defaults_to_all_inventory_devices():
+    req = parse_intent("audit vlans")
+    assert req.intent == IntentType.AUDIT_VLANS
+    assert req.scope == ScopeType.ALL

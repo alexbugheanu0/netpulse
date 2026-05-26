@@ -29,6 +29,15 @@ ALLOWED_READ_INTENTS: frozenset[IntentType] = frozenset({
     IntentType.DRIFT_CHECK,
 })
 
+# Targetless status and audit reads are evaluated across enrolled switches.
+# Evidence creation and endpoint diagnosis require explicit targeting because
+# their scope or resulting artifacts deserve an operator choice.
+IMPLICIT_ALL_READ_INTENTS: frozenset[IntentType] = ALLOWED_READ_INTENTS - frozenset({
+    IntentType.BACKUP_CONFIG,
+    IntentType.DIFF_BACKUP,
+    IntentType.DIAGNOSE_ENDPOINT,
+})
+
 # Commands may be sent only after an intent and inventory target pass validation.
 ALLOWED_READ_COMMANDS: frozenset[str] = frozenset({
     "show interfaces status",

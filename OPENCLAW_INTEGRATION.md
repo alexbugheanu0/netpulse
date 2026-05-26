@@ -236,8 +236,11 @@ use `query` for large ARP, MAC, route, interface, error, CDP, or logging lookups
 | `all` | omit | — | All SSH-enabled devices in inventory |
 | `role` | omit | required | All SSH-enabled devices with that role |
 
-For chat prompts that name a role, prefer `scope=role` over `scope=all`. Reserve `scope=all` for
-explicit network-wide requests.
+For allowed status/read and audit prompts with no device, role, or scope,
+NetPulse defaults to `scope=all`, limited to SSH-enabled inventory devices.
+For prompts that name a role, use `scope=role`; for prompts that name a device,
+use `scope=single`. `backup_config`, `diff_backup`, and `diagnose_endpoint`
+require an explicit device, role, or scope.
 
 ### Response schema
 
@@ -330,7 +333,7 @@ path, and approval metadata cannot override the policy.
 
 **Request:**
 ```json
-{"intent":"health_check","scope":"all"}
+{"intent":"health_check"}
 ```
 
 **Response:**

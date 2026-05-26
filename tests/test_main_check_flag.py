@@ -6,10 +6,12 @@ table and exits with code 0 WITHOUT calling executor.execute().
 
 from __future__ import annotations
 
+import argparse
 import pytest
 from unittest.mock import MagicMock, patch
 
-from app.models import Device
+from app.main import resolve_request
+from app.models import Device, ScopeType
 
 MOCK_INVENTORY = {
     "sw-core-01": Device(
@@ -74,3 +76,39 @@ def test_check_flag_with_json_format_still_exits_zero():
     code, _, mock_exec = _run_main_with_check("--format", "json")
     assert code == 0
     mock_exec.assert_not_called()
+
+
+def _request_args(intent: str, **overrides) -> argparse.Namespace:
+    values = {
+        "intent": intent,
+        "device": None,
+        "role": None,
+        "scope": None,
+        "target": None,
+        "endpoint": None,
+        "query": None,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_targetless_status_cli_intent_defaults_to_all_inventory_devices():
+    req = resolve_request(_request_args("health_check"))
+    assert req.scope == ScopeType.ALL
+    assert req.device is None
+
+
+def test_explicit_device_and_role_cli_targets_remain_narrow():
+    assert resolve_request(_request_args("show_vlans", device="sw-core-01")).scope == ScopeType.SINGLE
+    assert resolve_request(_request_args("show_vlans", role="access")).scope == ScopeType.ROLE
+
+
+@pytest.mark.parametrize("intent", ["backup_config", "diff_backup", "diagnose_endpoint"])
+def test_artifact_and_endpoint_cli_intents_require_explicit_target_or_scope(intent):
+    with pytest.raises(ValueError, match="requires --device, --role, or an explicit --scope"):
+        resolve_request(_request_args(intent, endpoint="10.0.0.25"))
+
+
+def test_explicit_all_scope_is_allowed_for_backup():
+    req = resolve_request(_request_args("backup_config", scope="all"))
+    assert req.scope == ScopeType.ALL

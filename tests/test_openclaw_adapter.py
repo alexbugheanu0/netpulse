@@ -239,6 +239,43 @@ def test_valid_all_scope_request():
     assert len(resp["results"]) == 1
 
 
+def test_targetless_status_read_defaults_to_all_inventory_devices():
+    p1, p2, p3 = _patch_all(results=[HEALTH_RESULT])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "health_check"})
+
+    assert resp["success"] is True
+    assert resp["scope"] == "all"
+
+
+def test_named_device_without_scope_remains_single_device():
+    p1, p2, p3 = _patch_all()
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
+
+    assert resp["success"] is True
+    assert resp["scope"] == "single"
+
+
+def test_named_role_without_scope_resolves_to_role_scope():
+    p1, p2, p3 = _patch_all(results=[HEALTH_RESULT])
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": "health_check", "role": "core"})
+
+    assert resp["success"] is True
+    assert resp["scope"] == "role"
+
+
+@pytest.mark.parametrize("intent", ["backup_config", "diff_backup", "diagnose_endpoint"])
+def test_targetless_explicit_scope_intents_do_not_default_to_all(intent):
+    p1, p2, p3 = _patch_all(validate_ok=False)
+    with p1, p2, p3:
+        resp = run_openclaw({"intent": intent, "endpoint": "10.0.0.25"})
+
+    assert resp["success"] is False
+    assert resp["scope"] == "single"
+
+
 def test_diagnose_endpoint_accepts_endpoint_field():
     diagnosis = JobResult(
         success=True,

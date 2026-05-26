@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from app.access_policy import IMPLICIT_ALL_READ_INTENTS
 from app.logger import get_logger
 from app.models import IntentRequest, IntentType, ScopeType
 
@@ -109,7 +110,7 @@ def parse_intent(query: str) -> IntentRequest:
     Examples:
         "show trunk status on sw-dist-01"      -> show_trunks,   device=sw-dist-01
         "backup running config from sw-acc-02" -> backup_config, device=sw-acc-02
-        "health check all switches"            -> health_check,  scope=all
+        "health check"                         -> health_check,  scope=all
         "show errors on sw-core-01"            -> show_errors,   device=sw-core-01
         "show cdp neighbors on sw-dist-01"     -> show_cdp,      device=sw-dist-01
         "show mac table on sw-acc-01"          -> show_mac,      device=sw-acc-01
@@ -117,8 +118,12 @@ def parse_intent(query: str) -> IntentRequest:
         "ping 10.0.0.1 from sw-core-01"        -> blocked directed-probe request
         "diff config on sw-core-01"            -> diff_backup,   device=sw-core-01
 
-    Raises ValueError with an operator-friendly message if intent or device
-    cannot be resolved.
+    Targetless status and audit read intents default to all SSH-enabled
+    enrolled inventory devices. Artifact-producing and endpoint-diagnosis
+    reads still require an explicit target or scope.
+
+    Raises ValueError with an operator-friendly message if intent or required
+    targeting cannot be resolved.
     """
     intent = _match_intent(query)
     if not intent:
@@ -129,10 +134,17 @@ def parse_intent(query: str) -> IntentRequest:
             "Tip: use --intent / --device flags for unambiguous input."
         )
 
-    scope = ScopeType.ALL if ALL_SCOPE_PATTERN.search(query) else ScopeType.SINGLE
-
     device_match = DEVICE_PATTERN.search(query)
     device: Optional[str] = device_match.group(1).lower() if device_match else None
+
+    if ALL_SCOPE_PATTERN.search(query):
+        scope = ScopeType.ALL
+    elif device is not None:
+        scope = ScopeType.SINGLE
+    elif intent in IMPLICIT_ALL_READ_INTENTS:
+        scope = ScopeType.ALL
+    else:
+        scope = ScopeType.SINGLE
 
     # Ping requires a target IP extracted from the query
     ping_target: Optional[str] = None
@@ -162,8 +174,8 @@ def parse_intent(query: str) -> IntentRequest:
     if scope == ScopeType.SINGLE and device is None:
         raise ValueError(
             f"No device name found in query: '{query}'\n"
-            "Include a device name (e.g. sw-core-01), use 'all' for all devices,\n"
-            "or use --device explicitly."
+            "This operation requires an explicit device (e.g. sw-core-01) or "
+            "explicit 'all' scope."
         )
 
     req = IntentRequest(

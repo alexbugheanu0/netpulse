@@ -9,6 +9,8 @@ only enrolled switches, and stores plan and audit evidence for each request.
 NetPulse is intentionally restricted:
 
 - Only SSH-enabled devices listed in `inventory/devices.yaml` may be contacted.
+- An allowed status or audit check with no named target runs only across those
+  enrolled, SSH-enabled inventory switches.
 - Only fixed read commands are allowed.
 - Configuration changes, arbitrary CLI, directed probes such as `ping`, and
   non-network operations are blocked.
@@ -103,6 +105,9 @@ python3 -m app.main --intent diagnose_endpoint --device sw-acc-01 --endpoint 10.
 Read groups of enrolled switches:
 
 ```bash
+python3 -m app.main "health check"
+python3 -m app.main "show interface errors"
+python3 -m app.main "audit vlans"
 python3 -m app.main --intent health_check --scope all
 python3 -m app.main --intent show_errors --role access
 ```
@@ -115,6 +120,10 @@ python3 -m app.main --intent drift_check --device sw-core-01
 python3 -m app.main --intent backup_config --device sw-core-01
 python3 -m app.main --intent diff_backup --device sw-core-01
 ```
+
+Targetless status reads and audits default to all enrolled, SSH-enabled
+inventory switches. `backup_config`, `diff_backup`, and `diagnose_endpoint`
+require an explicit device or scope.
 
 Preview a request or test SSH reachability without running a read job:
 
@@ -144,7 +153,11 @@ with a structured read request:
 
 ```bash
 ./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-core-01","scope":"single","response_mode":"telegram"}'
+./scripts/run_openclaw_netpulse.sh '{"intent":"health_check","response_mode":"telegram"}'
 ```
+
+In the second example, the omitted target is resolved to all enrolled,
+SSH-enabled inventory switches. It cannot expand beyond inventory.
 
 For payload schemas and chat integration details, see
 [OPENCLAW_INTEGRATION.md](OPENCLAW_INTEGRATION.md) and

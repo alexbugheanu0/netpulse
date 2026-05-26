@@ -52,7 +52,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ValidationError
 
-from app.access_policy import ALLOWED_READ_INTENTS
+from app.access_policy import ALLOWED_READ_INTENTS, IMPLICIT_ALL_READ_INTENTS
 from app import executor
 from app.approval import ApprovalError, approve_pending_request
 from app.inventory import load_inventory
@@ -104,7 +104,7 @@ class OpenClawRequest(BaseModel):
 
     intent:    str               # must be in OPENCLAW_ALLOWED_INTENTS
     device:    Optional[str] = None
-    scope:     str = "single"   # "single" | "all" | "role"
+    scope:     str = "single"   # omitted targetless status/audit reads become "all"
     role:      Optional[str] = None
     raw_query: str = ""          # original user message; logged for audit only
     # Token-saving knobs — see SKILL.md for full documentation
@@ -187,9 +187,10 @@ def run_openclaw(payload: dict) -> dict:
         from app.openclaw_adapter import run_openclaw
         response = run_openclaw({"intent": "show_vlans", "device": "sw-core-01"})
     """
-    _t0        = time.monotonic()
+    _t0 = time.monotonic()
+    payload = _with_effective_scope(payload)
     intent_str = payload.get("intent", "unknown")
-    scope_str  = payload.get("scope",  "single")
+    scope_str = payload.get("scope", "single")
 
     # ── Step 1: validate request schema ───────────────────────────────────────
     try:
@@ -395,6 +396,30 @@ def run_openclaw(payload: dict) -> dict:
 
 
 # ── Response-shaping helpers ───────────────────────────────────────────────────
+
+def _with_effective_scope(payload: dict) -> dict:
+    """Fill an omitted scope without widening an explicitly targeted request."""
+
+    if "scope" in payload:
+        return payload
+
+    normalized = dict(payload)
+    if normalized.get("device"):
+        normalized["scope"] = ScopeType.SINGLE.value
+        return normalized
+    if normalized.get("role"):
+        normalized["scope"] = ScopeType.ROLE.value
+        return normalized
+
+    try:
+        intent = IntentType(str(normalized.get("intent", "")))
+    except ValueError:
+        return normalized
+
+    if intent in IMPLICIT_ALL_READ_INTENTS:
+        normalized["scope"] = ScopeType.ALL.value
+    return normalized
+
 
 def _truncate_parsed_data(
     data: Any, verbose: bool
