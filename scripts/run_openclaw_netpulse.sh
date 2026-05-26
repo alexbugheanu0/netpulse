@@ -10,7 +10,7 @@
 #
 # Exit codes:
 #   0  all jobs succeeded
-#   1  input error (missing payload, venv not found, .env missing)
+#   1  input error (missing payload, venv not found, credentials unavailable)
 #   2  one or more jobs failed at runtime
 
 set -euo pipefail
@@ -28,7 +28,7 @@ if [ ! -f "$PYTHON" ]; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
-    printf '{"success":false,"intent":"unknown","scope":"unknown","results":[],"error":"Missing .env file. Copy .env.example to .env and fill in NETPULSE_USERNAME / NETPULSE_PASSWORD."}\n'
+    printf '{"success":false,"intent":"unknown","scope":"unknown","results":[],"error":"Read-only switch credentials are unavailable. Check the configured credentials."}\n'
     exit 1
 fi
 

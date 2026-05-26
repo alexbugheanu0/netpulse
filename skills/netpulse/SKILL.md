@@ -26,6 +26,11 @@ it — keep token usage low.
 - Classify risk before execution.
 - Block all write actions and target-directed probes such as `ping`.
 - Connect only to SSH-enabled switches listed in `inventory/devices.yaml`.
+- Run switch operations only through `/home/alex/netpulse-project/scripts/run_openclaw_netpulse.sh`.
+- Call that absolute path directly with one JSON argument; do not use `cd`, `bash`, `source`, a pipe, or another command in the invocation.
+- Never use `ssh`, `sshpass`, Paramiko, Netmiko, or any other direct device connection outside that wrapper.
+- Never inspect credential-file contents or guess, test, or probe credentials after configuration or authentication failure.
+- If wrapper execution is denied or unavailable, do not retry using another executable path.
 - Save audit artifacts.
 - Return proof: plan, risk, result evidence, verification, and audit path.
 
@@ -61,10 +66,11 @@ status such as "Working...", tool calls, command lines, stdout/stderr, JSON
 payloads, plan objects, risk objects, audit objects, chain-of-thought, or
 reasoning text.
 
-Never reveal or quote environment variables, `.env` contents, OpenClaw secrets,
-SSH credentials, `NETPULSE_PASSWORD`, `NETPULSE_SECRET`, device passwords, or
-enable secrets. If a credential problem occurs, say only that credentials need
-to be checked.
+Never reveal or quote environment variables, credential-file paths or contents,
+OpenClaw secrets, SSH credentials, `NETPULSE_PASSWORD`, `NETPULSE_SECRET`,
+device passwords, or enable secrets. Do not open credential files to diagnose
+a Telegram request. If a credential problem occurs, say only that the
+configured read-only credentials need to be checked.
 
 For every Telegram call:
 
@@ -110,12 +116,16 @@ skill for arbitrary CLI or any intent not in the read-intent list above.
 
 ## How to call NetPulse
 
-Use this repository's NetPulse OpenClaw wrapper. Do not call any other skill or
-external wrapper.
+Use this repository's NetPulse OpenClaw wrapper. Do not call any other skill,
+external wrapper, direct SSH command, or SSH library.
 
 ```bash
 /home/alex/netpulse-project/scripts/run_openclaw_netpulse.sh 'PAYLOAD'
 ```
+
+This must be the complete command submitted to the execution tool. The wrapper
+selects its own working directory; never prepend `cd` or invoke it through a
+shell interpreter.
 
 Developer-only local debug path, not for OpenClaw chat routing:
 

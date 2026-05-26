@@ -158,18 +158,20 @@ def _failure_summary(device: str, error: str) -> str:
     low = error.lower()
 
     if "authentication" in low or "auth" in low:
-        return (
-            f"{device}: Authentication failed — "
-            "check NETPULSE_USERNAME / NETPULSE_PASSWORD in .env."
-        )
+        return f"{device}: Authentication failed - check the configured read-only credentials."
     if "timed out" in low or "timeout" in low:
         return f"{device}: Unreachable or slow — connection timed out."
     if "not found in inventory" in low:
         return f"{device}: Device not found in inventory."
     if "ssh disabled" in low:
         return f"{device}: SSH is disabled for this device in inventory."
-    if "credentials are not set" in low or "not set" in low:
-        return f"{device}: SSH credentials not configured — check .env file."
+    if (
+        "credentials are not set" in low
+        or "not set" in low
+        or "netpulse_secret" in low
+        or "read-only device access" in low
+    ):
+        return f"{device}: SSH credentials unavailable - check the configured read-only credentials."
     if "connection refused" in low:
         return f"{device}: Connection refused on port 22."
     # Generic fallback — cap length so it stays one readable line

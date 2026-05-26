@@ -784,7 +784,8 @@ def test_telegram_response_redacts_secret_patterns():
 
     serialised = json.dumps(resp)
     assert secret not in serialised
-    assert "NETPULSE_SECRET=[REDACTED]" in serialised
+    assert "configured read-only credentials" in serialised
+    assert "NETPULSE_SECRET" not in serialised
 
 
 # ── Device writes are disabled ────────────────────────────────────────────────
