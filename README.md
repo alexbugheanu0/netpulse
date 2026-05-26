@@ -23,19 +23,22 @@ intent -> plan -> risk check -> inventory/read-only check -> execute -> audit
 
 ## Quick Start
 
-### Automated setup
-
-From an existing clone:
+### Option A - Setup Wizard
 
 ```bash
-cd /home/alex/netpulse-project
+git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
+cd netpulse-project
 bash scripts/setup.sh
 ```
 
-The setup wizard creates the Python environment, collects read-only SSH
-credentials, and helps add permitted switches.
+The setup wizard installs dependencies, creates the venv, helps you set SSH
+credentials, and can add devices. Later, add or remove devices with:
 
-### Manual setup
+```bash
+bash scripts/add-device.sh
+```
+
+### Option B - Manual Setup
 
 ```bash
 git clone https://github.com/alexbugheanu0/netpulse.git netpulse-project
