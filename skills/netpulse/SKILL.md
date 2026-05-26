@@ -37,6 +37,23 @@ intent -> plan -> risk check -> read-only/inventory check -> execute -> audit
 
 ---
 
+## Telegram routing for device questions
+
+This Telegram agent is for NetPulse network-switch operations.
+
+- Treat unqualified phrases such as `my devices`, `devices`, `device status`,
+  `network status`, and `health status` as referring to enrolled switches in
+  `inventory/devices.yaml`.
+- For `what is the status of my devices?` and equivalent targetless requests,
+  run `health_check` without `device`, `role`, or `scope`; the adapter resolves
+  it to all SSH-enabled inventory switches only.
+- If the user names one inventory switch, use `scope=single` for that switch.
+- Do not run OpenClaw gateway/node/host checks to answer a switch-inventory
+  question. Inspect those only when the user explicitly says `OpenClaw node`,
+  `gateway`, or `host`.
+
+---
+
 ## Telegram privacy and final-only replies
 
 Telegram must receive only the final user-facing answer. Never send interim

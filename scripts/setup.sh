@@ -264,7 +264,7 @@ step "Step 7 — OpenClaw + NetPulse integration"
 
 echo ""
 info "OpenClaw connects NetPulse to Telegram, WhatsApp, and Discord."
-info "You chat — NetPulse runs safe intents on your switches."
+info "Telegram is routed to a dedicated NetPulse agent for inventory-only switch reads."
 echo ""
 
 OPENCLAW_ALREADY_INSTALLED=false
@@ -273,13 +273,27 @@ if command -v openclaw &>/dev/null; then
     OPENCLAW_ALREADY_INSTALLED=true
 fi
 
-SKILL_ALREADY_CONFIGURED=false
-if openclaw config get skills.load.extraDirs 2>/dev/null | grep -q "netpulse-project/skills" 2>/dev/null; then
-    ok "NetPulse skill already registered in OpenClaw"
-    SKILL_ALREADY_CONFIGURED=true
+NETPULSE_AGENT_CONFIGURED=false
+if $OPENCLAW_ALREADY_INSTALLED && \
+   openclaw agents list --bindings --json 2>/dev/null | \
+       python3 -c 'import json, sys
+agents = json.load(sys.stdin)
+project = sys.argv[1]
+configured = any(
+    agent.get("id") == "netpulse"
+    and agent.get("workspace") == project
+    and any(
+        "telegram" in route
+        for route in agent.get("bindingDetails", []) + agent.get("routes", [])
+    )
+    for agent in agents
+)
+raise SystemExit(0 if configured else 1)' "${PROJECT_ROOT}"; then
+    ok "Dedicated NetPulse Telegram agent already configured"
+    NETPULSE_AGENT_CONFIGURED=true
 fi
 
-if $OPENCLAW_ALREADY_INSTALLED && $SKILL_ALREADY_CONFIGURED; then
+if $OPENCLAW_ALREADY_INSTALLED && $NETPULSE_AGENT_CONFIGURED; then
     ok "OpenClaw + NetPulse already integrated — skipping"
     S_OPENCLAW=true
 else
@@ -312,24 +326,6 @@ else
             curl -fsSL https://openclaw.ai/install.sh | bash
         fi
 
-        # Replace hardcoded paths in SKILL.md with this machine's project root
-        info "Updating project paths in NetPulse skill..."
-        sed -i "s|/home/alex/netpulse-project|${PROJECT_ROOT}|g" skills/netpulse/SKILL.md
-        ok "Skill paths set to ${PROJECT_ROOT}"
-
-        # Register the skill with OpenClaw via extraDirs (no copy needed —
-        # OpenClaw reads directly from the project's skills/ directory)
-        info "Registering NetPulse skill with OpenClaw..."
-        openclaw config set skills.load.extraDirs "[\"${PROJECT_ROOT}/skills\"]"
-        ok "Skill registered — OpenClaw loads it from ${PROJECT_ROOT}/skills/"
-
-        # Restart gateway if running so it picks up the skill
-        if systemctl --user is-active openclaw-gateway &>/dev/null 2>&1 || \
-           systemctl is-active openclaw-gateway &>/dev/null 2>&1; then
-            info "Restarting OpenClaw gateway to load the skill..."
-            openclaw gateway restart 2>/dev/null || true
-        fi
-
         # Only run onboarding if OpenClaw was newly installed
         if ! $OPENCLAW_ALREADY_INSTALLED; then
             echo ""
@@ -339,7 +335,43 @@ else
             openclaw onboard --install-daemon || warn "Onboarding incomplete — run 'openclaw onboard --install-daemon' manually"
         fi
 
-        S_OPENCLAW=true
+        if openclaw agents list --json 2>/dev/null | grep -q '"id": "netpulse"'; then
+            info "Binding the existing NetPulse agent to Telegram..."
+            openclaw agents bind --agent netpulse --bind telegram >/dev/null
+        else
+            info "Creating a dedicated NetPulse Telegram agent..."
+            openclaw agents add netpulse \
+                --non-interactive \
+                --workspace "${PROJECT_ROOT}" \
+                --bind telegram >/dev/null
+        fi
+
+        if openclaw agents list --bindings --json 2>/dev/null | \
+            python3 -c 'import json, sys
+agents = json.load(sys.stdin)
+project = sys.argv[1]
+ok = any(
+    agent.get("id") == "netpulse"
+    and agent.get("workspace") == project
+    and any(
+        "telegram" in route
+        for route in agent.get("bindingDetails", []) + agent.get("routes", [])
+    )
+    for agent in agents
+)
+raise SystemExit(0 if ok else 1)' "${PROJECT_ROOT}"; then
+            ok "Telegram routed to the NetPulse repository workspace"
+            if systemctl --user is-active openclaw-gateway &>/dev/null 2>&1 || \
+               systemctl is-active openclaw-gateway &>/dev/null 2>&1; then
+                info "Restarting OpenClaw gateway to load NetPulse routing..."
+                openclaw gateway restart 2>/dev/null || true
+            fi
+            S_OPENCLAW=true
+        else
+            warn "NetPulse Telegram agent setup could not be verified."
+            warn "Run: openclaw agents add netpulse --non-interactive --workspace \"${PROJECT_ROOT}\" --bind telegram"
+            S_OPENCLAW=false
+        fi
     else
         info "Skipping OpenClaw — run this step later with: bash scripts/setup.sh"
     fi
@@ -366,7 +398,8 @@ _status $S_OPENCLAW "OpenClaw + NetPulse integration"
 echo ""
 echo -e "${BOLD}How NetPulse + OpenClaw work together:${RESET}"
 echo ""
-echo "     Telegram/WhatsApp/Discord message"
+echo "     Telegram message"
+echo "        → routed to the dedicated NetPulse agent in this repository"
 echo "        → OpenClaw reads skills/netpulse/SKILL.md"
 echo "        → builds a safe JSON payload"
 echo "        → runs scripts/run_openclaw_netpulse.sh"
@@ -381,6 +414,7 @@ echo "    python3 -m app.main --intent health_check --device sw-core-01"
 echo ""
 echo "  Chat:"
 echo "    Message your bot:  \"what vlans are on sw-core-01?\""
+echo "    Message your bot:  \"what is the status of my devices?\""
 echo "    OpenClaw + NetPulse handle the rest."
 echo ""
 echo "  Add devices:  bash scripts/add-device.sh"

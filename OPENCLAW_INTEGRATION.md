@@ -19,8 +19,9 @@ subprocess.
 User message (Telegram / WhatsApp / Discord)
          │
          ▼
-OpenClaw LLM agent
-  (reads skills/netpulse/SKILL.md at session start)
+Dedicated OpenClaw agent: netpulse
+  (workspace: /home/alex/netpulse-project)
+  (reads AGENTS.md and skills/netpulse/SKILL.md at session start)
          │  decides intent, device, scope
          ▼
 exec tool
@@ -39,6 +40,10 @@ NetPulse lifecycle
          ▼
 JSON response → summary → chat reply
 ```
+
+The Telegram route must point to the dedicated `netpulse` agent. Otherwise a
+generic OpenClaw agent can interpret "devices" as OpenClaw nodes instead of
+inventory switches and never call the adapter.
 
 The adapter enforces an explicit intent allowlist and never lets any string from OpenClaw reach the
 device SSH session directly. Only fixed read intents against SSH-enabled entries in
@@ -81,35 +86,39 @@ When stored via OpenClaw secrets, the variables are injected into the environmen
 before `exec` runs, so `app/openclaw_adapter.py` picks them up automatically via
 `python-dotenv` / `os.environ`.
 
-### 3. Install the skill
+### 3. Create the dedicated Telegram agent
 
-**Option A — copy to the shared OpenClaw skills folder**
-
-```bash
-cp -r /home/alex/netpulse-project/skills/netpulse ~/.openclaw/skills/
-```
-
-**Option B — add the project skills directory to `openclaw.json`**
+The NetPulse agent must use this repository as its workspace. OpenClaw loads
+`skills/netpulse/SKILL.md` directly from that workspace.
 
 ```bash
-openclaw config set skills.load.extraDirs '["/home/alex/netpulse-project/skills"]'
+openclaw agents add netpulse \
+  --non-interactive \
+  --workspace /home/alex/netpulse-project \
+  --bind telegram
 ```
 
-### 4. Verify the skill loaded
+If the `netpulse` agent already exists, bind Telegram to it:
 
 ```bash
-openclaw skills list | grep netpulse
+openclaw agents bind --agent netpulse --bind telegram
 ```
 
-You should see `netpulse` in the list. If not, restart OpenClaw after copying the skill.
+### 4. Verify routing and the skill
 
-### 5. Update the device path in the skill
-
-Open `skills/netpulse/SKILL.md` and confirm the wrapper path in the "How to call NetPulse"
-section matches this repository:
-
+```bash
+openclaw agents list --bindings
+openclaw skills list --agent netpulse | grep netpulse
 ```
-/home/alex/netpulse-project/scripts/run_openclaw_netpulse.sh 'PAYLOAD'
+
+The agent listing must show Telegram routed to `netpulse`, and the skill list
+must show `netpulse`. If either is absent, Telegram questions will not be
+handled by the inventory-scoped NetPulse workflow.
+
+### 5. Restart the gateway
+
+```bash
+openclaw gateway restart
 ```
 
 ---
@@ -149,11 +158,12 @@ source .venv/bin/activate
 Start a new OpenClaw session and send:
 
 ```
-what vlans are on sw-core-01?
+what is the status of my devices?
 ```
 
-OpenClaw should load the netpulse skill, build the correct payload, run the adapter, and
-reply with a VLAN summary.
+The dedicated NetPulse agent should interpret `my devices` as the enrolled
+switch inventory, run a targetless `health_check` that resolves to all
+SSH-enabled inventory switches, and reply with the aggregate switch summary.
 
 > **Exec approval note:** The first time OpenClaw uses the `exec` tool you may see a prompt asking
 > you to approve execution of shell commands by the netpulse skill. Grant approval for the netpulse skill
@@ -747,14 +757,23 @@ Steps:
 
 ---
 
-### Skill not loading in OpenClaw
+### Telegram answers about OpenClaw nodes instead of switches
 
-If `openclaw skills list` does not show `netpulse`:
+If a message such as `what is the status of my devices?` returns gateway,
+desktop, or OpenClaw node information, Telegram is not routed to the dedicated
+NetPulse agent. Check:
 
-1. Confirm the `SKILL.md` exists at `~/.openclaw/skills/netpulse/SKILL.md` or that
-   `skills.load.extraDirs` includes the project's `skills/` folder.
-2. Restart OpenClaw after adding the skill — skills are read at session start.
-3. Check OpenClaw logs for YAML parse errors in the skill frontmatter.
+```bash
+openclaw agents list --bindings
+openclaw skills list --agent netpulse | grep netpulse
+```
+
+If needed, bind Telegram and restart the gateway:
+
+```bash
+openclaw agents bind --agent netpulse --bind telegram
+openclaw gateway restart
+```
 
 ---
 

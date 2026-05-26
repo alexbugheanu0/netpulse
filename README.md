@@ -151,8 +151,20 @@ python3 -m app.main --intent show_vlans --device sw-core-01 --check
 
 ## OpenClaw
 
-Register the repo-local skill at `skills/netpulse/`, then invoke the wrapper
-with a structured read request:
+Telegram should be routed to a dedicated NetPulse OpenClaw agent whose
+workspace is this repository. This makes an unqualified question such as
+`what is the status of my devices?` run a health check only against enrolled,
+SSH-enabled inventory switches, rather than checking OpenClaw host nodes.
+
+```bash
+openclaw agents add netpulse --non-interactive --workspace /home/alex/netpulse-project --bind telegram
+openclaw agents list --bindings
+openclaw skills list --agent netpulse
+openclaw gateway restart
+```
+
+The setup wizard configures this routing automatically. To call the wrapper
+directly with a structured read request:
 
 ```bash
 ./scripts/run_openclaw_netpulse.sh '{"intent":"show_vlans","device":"sw-core-01","scope":"single","response_mode":"telegram"}'
